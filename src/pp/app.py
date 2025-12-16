@@ -203,8 +203,6 @@ def main():
             progress_bar = st.progress(0)
             status_text = st.empty()
             warnings_container = st.container()
-            file_progress_container = st.container()
-            file_progress_bars: dict[str, tuple] = {}
 
             cached_entry = st.session_state.get("last_result")
             if cached_entry and cached_entry.get("key") == cache_key:
@@ -218,16 +216,6 @@ def main():
                     progress = current / total if total > 0 else 1.0
                     progress_bar.progress(progress)
                     status_text.text(f"Processing: {filename} ({current}/{total})")
-
-                    # Per-file progress bars
-                    if filename not in file_progress_bars:
-                        row = file_progress_container.container()
-                        txt = row.empty()
-                        bar = row.progress(0.0)
-                        file_progress_bars[filename] = (txt, bar)
-                    txt, bar = file_progress_bars[filename]
-                    bar.progress(progress)
-                    txt.text(f"{filename}: {int(progress * 100)}%")
 
                 with st.spinner("Processing presentations..."):
                     # Reset file pointers before processing
