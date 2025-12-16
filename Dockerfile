@@ -15,7 +15,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy application code
 COPY src/ ./src/
-COPY main.py ./
+COPY main.py README.md ./
 
 # Install the project itself
 RUN uv sync --frozen --no-dev
