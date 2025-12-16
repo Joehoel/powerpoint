@@ -49,6 +49,13 @@ def main() -> None:
         help="Paths or glob patterns to PPTX files (defaults to tests/fixtures/*.pptx)",
     )
     parser.add_argument("--repeat", type=int, default=3, help="Number of timing runs")
+    parser.add_argument("--copies", type=int, default=1, help="Repeat the file set this many times")
+    parser.add_argument(
+        "--target-count",
+        type=int,
+        default=None,
+        help="Adjust file list to reach this many total files (repeats/truncates). Overrides --copies",
+    )
     args = parser.parse_args()
 
     if args.files:
@@ -63,6 +70,12 @@ def main() -> None:
 
     if not paths:
         raise SystemExit("No PPTX files found to benchmark.")
+
+    base_paths = paths
+    if args.target_count:
+        paths = (base_paths * ((args.target_count // len(base_paths)) + 1))[: args.target_count]
+    elif args.copies > 1:
+        paths = base_paths * args.copies
 
     bench_files = [BenchFile(Path(p)) for p in paths]
 

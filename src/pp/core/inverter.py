@@ -9,11 +9,13 @@ import io
 import logging
 import os
 import zipfile
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Callable, Iterator
+from typing import IO, TYPE_CHECKING, Callable, Iterator, cast
 
 from pptx import Presentation
+from pptx.dml.color import RGBColor
 
 from pp.core.slide_processor import process_slide_safe
 from pp.models.config import InversionConfig
@@ -23,6 +25,8 @@ if TYPE_CHECKING:
     from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 logger = logging.getLogger(__name__)
+
+ConfigPayload = tuple[tuple[int, int, int], tuple[int, int, int], str, str, bool]
 
 
 @dataclass
@@ -58,10 +62,48 @@ class BatchResult:
 ProgressCallback = Callable[[int, int, str], None]
 
 
+def _get_max_workers() -> int:
+    """Return a small, safe worker count for constrained hosts."""
+    cpu = os.cpu_count() or 1
+    return max(1, min(2, cpu))
+
+
+def _use_threads() -> bool:
+    """Allow forcing threads via env to reduce memory pressure."""
+    return os.environ.get("PP_FORCE_THREADS", "0") == "1"
+
+
+def _color_to_tuple(color: RGBColor) -> tuple[int, int, int]:
+    return (int(color[0]), int(color[1]), int(color[2]))
+
+
+def _config_to_payload(config: InversionConfig) -> ConfigPayload:
+    return (
+        _color_to_tuple(config.foreground_color),
+        _color_to_tuple(config.background_color),
+        config.file_suffix,
+        config.folder_name,
+        config.invert_images,
+    )
+
+
+def _config_from_payload(
+    payload: tuple[tuple[int, int, int], tuple[int, int, int], str, str, bool]
+) -> InversionConfig:
+    fg, bg, suffix, folder, invert_images = payload
+    return InversionConfig(
+        foreground_color=RGBColor(*fg),
+        background_color=RGBColor(*bg),
+        file_suffix=suffix,
+        folder_name=folder,
+        invert_images=invert_images,
+    )
+
+
 def _process_file(
     file_data: bytes,
     filename: str,
-    config: InversionConfig,
+    config: InversionConfig | tuple[tuple[int, int, int], tuple[int, int, int], str, str, bool],
 ) -> ProcessingResult:
     """Process a single PPTX file.
 
@@ -73,6 +115,8 @@ def _process_file(
     Returns:
         ProcessingResult with output bytes.
     """
+    cfg = config if isinstance(config, InversionConfig) else _config_from_payload(config)
+
     try:
         # Load presentation from bytes
         with io.BytesIO(file_data) as file_stream:
@@ -81,14 +125,14 @@ def _process_file(
             # Process all slides
             all_warnings: list[str] = []
             for idx, slide in enumerate(prs.slides):
-                success, warnings = process_slide_safe(slide, config)
+                success, warnings = process_slide_safe(slide, cfg)
                 if warnings:
                     for warning in warnings:
                         all_warnings.append(f"Slide {idx + 1}: {warning}")
 
             # Generate output filename
             name_without_ext = os.path.splitext(filename)[0]
-            output_filename = f"{name_without_ext} {config.file_suffix}.pptx"
+            output_filename = f"{name_without_ext} {cfg.file_suffix}.pptx"
 
             # Save to bytes
             output_stream = io.BytesIO()
@@ -207,16 +251,8 @@ def process_files_streaming(
 ) -> Iterator[ProcessingResult]:
     """Process multiple uploaded files with streaming results.
 
-    Yields results as each file completes, allowing for progressive updates.
-    Uses sequential processing to minimize memory usage.
-
-    Args:
-        uploaded_files: List of Streamlit UploadedFile objects.
-        config: Inversion configuration.
-        progress_callback: Optional callback(current_file, total_files, filename).
-
-    Yields:
-        ProcessingResult for each completed file.
+    Uses a small, bounded executor (processes by default, threads if
+    PP_FORCE_THREADS=1) so at most a couple of files are in-flight.
     """
     # Collect all PPTX files to process
     files_to_process: list[tuple[bytes, str]] = []
@@ -235,14 +271,53 @@ def process_files_streaming(
     if total_files == 0:
         return
 
-    logger.info(f"Processing {total_files} files sequentially")
+    max_workers = _get_max_workers()
+    executor_cls = ThreadPoolExecutor if _use_threads() else ProcessPoolExecutor
+    logger.info(
+        f"Processing {total_files} files with {executor_cls.__name__} ({max_workers} workers)"
+    )
 
-    for idx, (file_data, filename) in enumerate(files_to_process):
-        result = _process_file(file_data, filename, config)
-        yield result
+    iterator = iter(files_to_process)
+    payload = _config_to_payload(config)
 
-        if progress_callback:
-            progress_callback(idx + 1, total_files, filename)
+    def submit_next(executor, futures):
+        try:
+            file_data, filename = next(iterator)
+        except StopIteration:
+            return False
+        fut = executor.submit(_process_file, file_data, filename, payload)
+        futures[fut] = filename
+        return True
+
+    with executor_cls(max_workers=max_workers) as executor:
+        futures: dict = {}
+        for _ in range(max_workers):
+            if not submit_next(executor, futures):
+                break
+
+        completed = 0
+        while futures:
+            done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
+            for fut in done:
+                filename = futures.pop(fut)
+                try:
+                    result = fut.result()
+                except Exception as e:
+                    logger.exception(f"Future failed for {filename}: {e}")
+                    result = ProcessingResult(
+                        filename=filename,
+                        success=False,
+                        output_data=None,
+                        warnings=[f"Unexpected error: {e}"],
+                    )
+
+                yield result
+
+                completed += 1
+                if progress_callback:
+                    progress_callback(completed, total_files, filename)
+
+                submit_next(executor, futures)
 
 
 def process_files(
@@ -287,15 +362,52 @@ def process_files(
         )
 
     results: list[ProcessingResult] = []
-    logger.info(f"Processing {total_files} files sequentially")
+    executor_cls = ThreadPoolExecutor if _use_threads() else ProcessPoolExecutor
+    max_workers = _get_max_workers()
+    logger.info(
+        f"Processing {total_files} files with {executor_cls.__name__} ({max_workers} workers)"
+    )
 
-    # Process files sequentially to minimize memory usage
-    for idx, (file_data, filename) in enumerate(files_to_process):
-        result = _process_file(file_data, filename, config)
-        results.append(result)
+    iterator = iter(files_to_process)
+    payload = _config_to_payload(config)
 
-        if progress_callback:
-            progress_callback(idx + 1, total_files, filename)
+    def submit_next(executor, futures):
+        try:
+            file_data, filename = next(iterator)
+        except StopIteration:
+            return False
+        fut = executor.submit(_process_file, file_data, filename, payload)
+        futures[fut] = filename
+        return True
+
+    with executor_cls(max_workers=max_workers) as executor:
+        futures: dict = {}
+        for _ in range(max_workers):
+            if not submit_next(executor, futures):
+                break
+
+        completed = 0
+        while futures:
+            done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
+            for fut in done:
+                filename = futures.pop(fut)
+                try:
+                    result = fut.result()
+                except Exception as e:
+                    logger.exception(f"Future failed for {filename}: {e}")
+                    result = ProcessingResult(
+                        filename=filename,
+                        success=False,
+                        output_data=None,
+                        warnings=[f"Unexpected error: {e}"],
+                    )
+                results.append(result)
+
+                completed += 1
+                if progress_callback:
+                    progress_callback(completed, total_files, filename)
+
+                submit_next(executor, futures)
 
     # Create output ZIP from in-memory results
     output_zip = _create_output_zip_from_results(results)
