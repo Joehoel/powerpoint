@@ -30,6 +30,24 @@ def _cached_color_preview(bg_hex: str, fg_hex: str):
     )
 
 
+@st.cache_data(show_spinner=False)
+def _cached_previews(pptx_bytes: bytes, bg_hex: str, fg_hex: str):
+    prs = Presentation(io.BytesIO(pptx_bytes))
+    if not prs.slides:
+        return None, None
+    orig = generate_slide_preview(
+        prs.slides[0],
+        background_color=(255, 255, 255),
+        text_color=(0, 0, 0),
+    )
+    inv = generate_slide_preview_inverted(
+        prs.slides[0],
+        background_color=hex_to_tuple(bg_hex),
+        foreground_color=hex_to_tuple(fg_hex),
+    )
+    return orig, inv
+
+
 def _hash_file(name: str, data: bytes) -> str:
     h = hashlib.sha256()
     h.update(name.encode())
@@ -127,30 +145,21 @@ def main():
 
         preview_cols = st.columns(2)
 
+        # Choose first PPTX bytes once
+        first_pptx_bytes = None
+        for f in uploaded_files:
+            if f.name.endswith(".pptx"):
+                first_pptx_bytes = f.getvalue()
+                break
+
         with preview_cols[0]:
             st.write("**Original**")
-            # Show preview of first slide from first PPTX
-            first_pptx = None
-            prs = None
-            for f in uploaded_files:
-                if f.name.endswith(".pptx"):
-                    first_pptx = f
-                    break
-
-            if first_pptx:
+            if first_pptx_bytes:
                 try:
                     with st.spinner("Loading preview..."):
-                        first_pptx.seek(0)
-                        prs = Presentation(io.BytesIO(first_pptx.read()))
-                        first_pptx.seek(0)
-
-                        if prs.slides:
-                            original_preview = generate_slide_preview(
-                                prs.slides[0],
-                                background_color=(255, 255, 255),
-                                text_color=(0, 0, 0),
-                            )
-                            st.image(original_preview, width=320)
+                        orig_img, inv_img = _cached_previews(first_pptx_bytes, bg_color, fg_color)
+                        if orig_img:
+                            st.image(orig_img, width=320)
                         else:
                             st.info("No slides in presentation")
                 except Exception as e:
@@ -158,16 +167,14 @@ def main():
 
         with preview_cols[1]:
             st.write("**After Inversion**")
-            # Show what the inverted slide would look like with actual color transform
-            if first_pptx and prs:
+            if first_pptx_bytes:
                 try:
                     with st.spinner("Loading preview..."):
-                        inverted_preview = generate_slide_preview_inverted(
-                            prs.slides[0],
-                            background_color=hex_to_tuple(bg_color),
-                            foreground_color=hex_to_tuple(fg_color),
-                        )
-                        st.image(inverted_preview, width=320)
+                        _, inv_img = _cached_previews(first_pptx_bytes, bg_color, fg_color)
+                        if inv_img:
+                            st.image(inv_img, width=320)
+                        else:
+                            st.info("No slides in presentation")
                 except Exception as e:
                     st.warning(f"Could not generate preview: {e}")
 
