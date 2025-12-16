@@ -151,31 +151,48 @@ def main():
                 first_pptx_bytes = f.getvalue()
                 break
 
+        preview_cache = st.session_state.get("preview_cache")
+        preview_key = None
+        cached_orig = cached_inv = None
+        if first_pptx_bytes:
+            preview_key = (
+                _hash_file("preview", first_pptx_bytes),
+                bg_color,
+                fg_color,
+            )
+            if preview_cache and preview_cache.get("key") == preview_key:
+                cached_orig = preview_cache.get("orig")
+                cached_inv = preview_cache.get("inv")
+
+        # Compute previews once if not cached
+        if first_pptx_bytes and (cached_orig is None or cached_inv is None):
+            try:
+                with st.spinner("Loading preview..."):
+                    orig_img, inv_img = _cached_previews(first_pptx_bytes, bg_color, fg_color)
+                    st.session_state.preview_cache = {
+                        "key": preview_key,
+                        "orig": orig_img,
+                        "inv": inv_img,
+                    }
+                    cached_orig, cached_inv = orig_img, inv_img
+            except Exception as e:
+                st.warning(f"Could not generate preview: {e}")
+
         with preview_cols[0]:
             st.write("**Original**")
             if first_pptx_bytes:
-                try:
-                    with st.spinner("Loading preview..."):
-                        orig_img, _ = _cached_previews(first_pptx_bytes, bg_color, fg_color)
-                        if orig_img:
-                            st.image(orig_img, width=320)
-                        else:
-                            st.info("No slides in presentation")
-                except Exception as e:
-                    st.warning(f"Could not generate preview: {e}")
+                if cached_orig:
+                    st.image(cached_orig, width=320)
+                else:
+                    st.info("No slides in presentation")
 
         with preview_cols[1]:
             st.write("**After Inversion**")
             if first_pptx_bytes:
-                try:
-                    with st.spinner("Loading preview..."):
-                        _, inv_img = _cached_previews(first_pptx_bytes, bg_color, fg_color)
-                        if inv_img:
-                            st.image(inv_img, width=320)
-                        else:
-                            st.info("No slides in presentation")
-                except Exception as e:
-                    st.warning(f"Could not generate preview: {e}")
+                if cached_inv:
+                    st.image(cached_inv, width=320)
+                else:
+                    st.info("No slides in presentation")
 
         st.divider()
 
@@ -204,8 +221,14 @@ def main():
             warnings_container = st.container()
 
             cached_entry = st.session_state.get("last_result")
-            cached_hit = cached_entry and cached_entry.get("key") == cache_key
-            if cached_hit:
+            if not isinstance(cached_entry, dict):
+                cached_entry = None
+            cached_hit = (
+                cached_entry is not None
+                and cached_entry.get("key") == cache_key
+                and cached_entry.get("result") is not None
+            )
+            if cached_hit and cached_entry is not None:
                 result = cached_entry["result"]
                 progress_bar.progress(1.0)
                 status_text.text(
