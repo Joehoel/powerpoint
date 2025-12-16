@@ -28,29 +28,44 @@ def apply_color_transform(
     This creates a more sophisticated inversion that maps the image's color range
     to the specified target colors rather than simple RGB inversion.
 
+    Handles three types of transparency:
+    1. RGBA images with explicit alpha channel
+    2. RGB images with transparency color defined in img.info['transparency']
+    3. Palette images with transparency
+
     Args:
         img: PIL Image to transform.
         target_dark: RGB tuple for dark colors (e.g., background color).
         target_light: RGB tuple for light colors (e.g., foreground color).
 
     Returns:
-        Transformed PIL Image.
+        Transformed PIL Image (RGBA if transparency present, RGB otherwise).
     """
-    # Convert to RGB if necessary
-    if img.mode == "RGBA":
-        # Preserve alpha channel
-        alpha = img.split()[3]
-        img_rgb = img.convert("RGB")
-    elif img.mode != "RGB":
-        img_rgb = img.convert("RGB")
-        alpha = None
-    else:
-        img_rgb = img
-        alpha = None
-
-    # Invert the image first
     from PIL import ImageOps
 
+    alpha = None
+    transparency_color = None
+
+    # Handle different image modes and transparency types
+    if img.mode == "RGBA":
+        # Explicit alpha channel
+        alpha = img.split()[3]
+        img_rgb = img.convert("RGB")
+    elif img.mode == "RGB" and "transparency" in img.info:
+        # RGB with transparency color - convert to RGBA first
+        transparency_color = img.info["transparency"]
+        img_rgb, alpha = _convert_transparency_color_to_alpha(img, transparency_color)
+    elif img.mode == "P":
+        # Palette mode - convert to RGBA to handle any transparency
+        rgba = img.convert("RGBA")
+        alpha = rgba.split()[3]
+        img_rgb = rgba.convert("RGB")
+    elif img.mode != "RGB":
+        img_rgb = img.convert("RGB")
+    else:
+        img_rgb = img
+
+    # Invert the image
     inverted = ImageOps.invert(img_rgb)
 
     # If target colors are standard black/white inversion, we're done
@@ -58,7 +73,6 @@ def apply_color_transform(
         result = inverted
     else:
         # Apply color mapping: remap inverted image to target color range
-        # Create lookup tables for each channel
         result = _remap_colors(inverted, target_dark, target_light)
 
     # Restore alpha channel if present
@@ -67,6 +81,37 @@ def apply_color_transform(
         result.putalpha(alpha)
 
     return result
+
+
+def _convert_transparency_color_to_alpha(
+    img: Image.Image,
+    transparency_color: tuple[int, int, int],
+) -> tuple[Image.Image, Image.Image]:
+    """Convert an RGB image with transparency color to RGB + alpha channel.
+
+    PNG images can define transparency via a specific color rather than an alpha
+    channel. This function creates an explicit alpha channel where pixels matching
+    the transparency color become fully transparent.
+
+    Args:
+        img: RGB PIL Image with transparency color.
+        transparency_color: RGB tuple that represents transparent pixels.
+
+    Returns:
+        Tuple of (RGB image, alpha channel as grayscale Image).
+    """
+    import numpy as np
+
+    # Convert to numpy for efficient comparison
+    arr = np.array(img)
+
+    # Create alpha channel: 255 for opaque, 0 for transparent
+    # Pixels matching transparency color become transparent
+    matches = np.all(arr == transparency_color, axis=2)
+    alpha_arr = np.where(matches, 0, 255).astype(np.uint8)
+
+    alpha = Image.fromarray(alpha_arr, mode="L")
+    return img, alpha
 
 
 def _remap_colors(

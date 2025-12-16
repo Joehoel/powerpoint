@@ -78,7 +78,10 @@ class TestApplyColorTransform:
         assert result.mode == "RGB"
 
     def test_palette_image_conversion(self):
-        """Test that palette images are converted correctly."""
+        """Test that palette images are converted correctly.
+        
+        Palette images are converted to RGBA to handle potential transparency.
+        """
         # Create a palette image
         palette_img = Image.new("P", (50, 50))
         
@@ -88,7 +91,8 @@ class TestApplyColorTransform:
             target_light=(255, 255, 255),
         )
         
-        assert result.mode == "RGB"
+        # Palette images are converted to RGBA to preserve any transparency
+        assert result.mode == "RGBA"
 
 
 class TestRemapColors:
