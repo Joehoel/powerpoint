@@ -3,6 +3,7 @@
 import io
 import logging
 from datetime import datetime
+from typing import Iterable, Tuple
 
 import streamlit as st
 from pptx import Presentation
@@ -19,6 +20,44 @@ from pp.utils.preview import (
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_color_preview(bg_hex: str, fg_hex: str):
+    return generate_color_preview(
+        background_color=hex_to_tuple(bg_hex),
+        foreground_color=hex_to_tuple(fg_hex),
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _cached_process_files(
+    file_blobs: Iterable[Tuple[str, bytes]],
+    config_payload: Tuple[str, str, str, str, bool],
+):
+    fg_hex, bg_hex, file_suffix, folder_name, invert_images = config_payload
+    config = InversionConfig.from_hex(
+        fg_hex=fg_hex,
+        bg_hex=bg_hex,
+        file_suffix=file_suffix,
+        folder_name=folder_name,
+        invert_images=invert_images,
+    )
+
+    class MemoryUpload:
+        def __init__(self, name: str, data: bytes):
+            self.name = name
+            self._data = data
+
+        def read(self) -> bytes:
+            return self._data
+
+        def seek(self, _: int) -> None:
+            # No-op for compatibility
+            pass
+
+    uploads = [MemoryUpload(name, data) for name, data in file_blobs]
+    return process_files(uploads, config)
 
 
 def main():
@@ -61,10 +100,7 @@ def main():
 
         # Show color preview
         st.subheader("Color Preview")
-        color_preview = generate_color_preview(
-            background_color=hex_to_tuple(bg_color),
-            foreground_color=hex_to_tuple(fg_color),
-        )
+        color_preview = _cached_color_preview(bg_color, fg_color)
         st.image(color_preview, use_container_width=True)
 
         st.divider()
@@ -102,11 +138,11 @@ def main():
         st.success(f"Uploaded {len(uploaded_files)} file(s)")
 
         # File preview section
+        file_blobs = [(f.name, f.getvalue()) for f in uploaded_files]
         with st.expander("Uploaded Files", expanded=True):
-            for f in uploaded_files:
-                file_size = len(f.getvalue()) / 1024  # KB
-                st.write(f"- **{f.name}** ({file_size:.1f} KB)")
-                f.seek(0)
+            for name, data in file_blobs:
+                file_size = len(data) / 1024  # KB
+                st.write(f"- **{name}** ({file_size:.1f} KB)")
 
         # Preview section
         st.subheader("Preview")
@@ -117,6 +153,7 @@ def main():
             st.write("**Original**")
             # Show preview of first slide from first PPTX
             first_pptx = None
+            prs = None
             for f in uploaded_files:
                 if f.name.endswith(".pptx"):
                     first_pptx = f
@@ -143,10 +180,10 @@ def main():
         with preview_cols[1]:
             st.write("**After Inversion**")
             # Show what the inverted slide would look like with actual color transform
-            if first_pptx:
+            if first_pptx and prs:
                 try:
                     inverted_preview = generate_slide_preview_inverted(
-                        prs.slides[0],  # type: ignore[possibly-unbound]
+                        prs.slides[0],
                         background_color=hex_to_tuple(bg_color),
                         foreground_color=hex_to_tuple(fg_color),
                     )
@@ -164,15 +201,9 @@ def main():
                 date_str = datetime.now().strftime("%Y-%m-%d")
                 final_folder_name = f"{folder_name} - {date_str}"
 
-            config = InversionConfig.from_hex(
-                fg_hex=fg_color,
-                bg_hex=bg_color,
-                file_suffix=file_suffix,
-                folder_name=final_folder_name,
-                invert_images=invert_images,
-            )
+            config_payload = (fg_color, bg_color, file_suffix, final_folder_name, invert_images)
 
-            # Progress tracking
+            # Progress tracking (local only; cached path returns instantly)
             progress_bar = st.progress(0)
             status_text = st.empty()
             warnings_container = st.container()
@@ -182,19 +213,25 @@ def main():
                 progress_bar.progress(progress)
                 status_text.text(f"Processing: {filename} ({current}/{total})")
 
-            # Process files
+            # Process files via cache (hashes by file bytes + config)
             with st.spinner("Processing presentations..."):
-                result = process_files(
-                    uploaded_files,
-                    config,
-                    progress_callback=update_progress,
+                result = _cached_process_files(tuple(file_blobs), config_payload)
+                # Progress for cached path is not incremental; show done
+                progress_bar.progress(1.0)
+                status_text.text(
+                    f"Complete! Processed {result.successful_files}/{result.total_files} files"
                 )
 
-            # Update progress to complete
-            progress_bar.progress(1.0)
-            status_text.text(
-                f"Complete! Processed {result.successful_files}/{result.total_files} files"
-            )
+            # Show warnings
+            if result.all_warnings:
+                with warnings_container:
+                    st.warning(f"Completed with {len(result.all_warnings)} warning(s)")
+                    with st.expander("Show warnings"):
+                        for warning in result.all_warnings:
+                            st.write(f"- {warning}")
+
+            # Store result in session state
+            st.session_state.processed_result = result
 
             # Show warnings
             if result.all_warnings:

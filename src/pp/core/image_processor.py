@@ -5,6 +5,7 @@ This module handles memory-efficient image color transformation.
 
 import io
 import logging
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from PIL import Image, ImageChops
@@ -26,17 +27,25 @@ def apply_color_transform(
     target_dark: tuple[int, int, int],
     target_light: tuple[int, int, int],
 ) -> Image.Image:
-    """Apply color transform using Pillow LUTs (no numpy).
+    """Apply color transform using cached Pillow LUTs (no numpy).
 
     Inverts then remaps dark/light ranges to target colors.
     Alpha is preserved and processed separately.
     """
 
-    def build_lut(dark: int, light: int) -> list[int]:
+    @lru_cache(maxsize=256)
+    def build_channel_lut(dark: int, light: int) -> tuple[int, ...]:
         if dark == 0 and light == 255:
-            return [255 - c for c in range(256)]
+            return tuple(255 - c for c in range(256))
         scale = light - dark
-        return [max(0, min(255, int(dark + (255 - c) * scale / 255))) for c in range(256)]
+        return tuple(max(0, min(255, int(dark + (255 - c) * scale / 255))) for c in range(256))
+
+    @lru_cache(maxsize=256)
+    def build_full_lut(dark: tuple[int, int, int], light: tuple[int, int, int]) -> tuple[int, ...]:
+        lr = build_channel_lut(dark[0], light[0])
+        lg = build_channel_lut(dark[1], light[1])
+        lb = build_channel_lut(dark[2], light[2])
+        return lr + lg + lb
 
     # Normalize image to RGB, track alpha separately
     alpha = None
@@ -65,11 +74,8 @@ def apply_color_transform(
     elif img.mode != "RGB":
         base = img.convert("RGB")
 
-    # Build LUTs per channel
-    lut_r = build_lut(target_dark[0], target_light[0])
-    lut_g = build_lut(target_dark[1], target_light[1])
-    lut_b = build_lut(target_dark[2], target_light[2])
-    full_lut = lut_r + lut_g + lut_b
+    # Build LUTs per channel (cached)
+    full_lut = build_full_lut(target_dark, target_light)
 
     transformed = base.point(full_lut)
 
