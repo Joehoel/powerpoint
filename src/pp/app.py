@@ -9,7 +9,12 @@ from pptx import Presentation
 
 from pp.core.inverter import process_files
 from pp.models.config import InversionConfig
-from pp.utils.preview import generate_color_preview, generate_slide_preview, hex_to_tuple
+from pp.utils.preview import (
+    generate_color_preview,
+    generate_slide_preview,
+    generate_slide_preview_inverted,
+    hex_to_tuple,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -137,13 +142,13 @@ def main():
 
         with preview_cols[1]:
             st.write("**After Inversion**")
-            # Show what the inverted slide would look like
+            # Show what the inverted slide would look like with actual color transform
             if first_pptx:
                 try:
-                    inverted_preview = generate_slide_preview(
+                    inverted_preview = generate_slide_preview_inverted(
                         prs.slides[0],  # type: ignore[possibly-unbound]
                         background_color=hex_to_tuple(bg_color),
-                        text_color=hex_to_tuple(fg_color),
+                        foreground_color=hex_to_tuple(fg_color),
                     )
                     st.image(inverted_preview, use_container_width=True)
                 except Exception as e:
