@@ -1,9 +1,9 @@
 """Streamlit application for PowerPoint Inverter."""
 
+import hashlib
 import io
 import logging
 from datetime import datetime
-from typing import Iterable, Tuple
 
 import streamlit as st
 from pptx import Presentation
@@ -30,37 +30,15 @@ def _cached_color_preview(bg_hex: str, fg_hex: str):
     )
 
 
-@st.cache_data(show_spinner=False)
-def _cached_process_files(
-    file_blobs: Iterable[Tuple[str, bytes]],
-    config_payload: Tuple[str, str, str, str, bool],
-):
-    fg_hex, bg_hex, file_suffix, folder_name, invert_images = config_payload
-    config = InversionConfig.from_hex(
-        fg_hex=fg_hex,
-        bg_hex=bg_hex,
-        file_suffix=file_suffix,
-        folder_name=folder_name,
-        invert_images=invert_images,
-    )
-
-    class MemoryUpload:
-        def __init__(self, name: str, data: bytes):
-            self.name = name
-            self._data = data
-
-        def read(self) -> bytes:
-            return self._data
-
-        def seek(self, _: int) -> None:
-            # No-op for compatibility
-            pass
-
-    uploads = [MemoryUpload(name, data) for name, data in file_blobs]
-    return process_files(uploads, config)
+def _hash_file(name: str, data: bytes) -> str:
+    h = hashlib.sha256()
+    h.update(name.encode())
+    h.update(data)
+    return h.hexdigest()
 
 
 def main():
+
     """Main Streamlit application entry point."""
     st.set_page_config(
         page_title="PowerPoint Inverter",
@@ -139,7 +117,7 @@ def main():
 
         # File preview section
         file_blobs = [(f.name, f.getvalue()) for f in uploaded_files]
-        with st.expander("Uploaded Files", expanded=True):
+        with st.expander("Uploaded Files", expanded=False):
             for name, data in file_blobs:
                 file_size = len(data) / 1024  # KB
                 st.write(f"- **{name}** ({file_size:.1f} KB)")
@@ -161,19 +139,20 @@ def main():
 
             if first_pptx:
                 try:
-                    first_pptx.seek(0)
-                    prs = Presentation(io.BytesIO(first_pptx.read()))
-                    first_pptx.seek(0)
+                    with st.spinner("Loading preview..."):
+                        first_pptx.seek(0)
+                        prs = Presentation(io.BytesIO(first_pptx.read()))
+                        first_pptx.seek(0)
 
-                    if prs.slides:
-                        original_preview = generate_slide_preview(
-                            prs.slides[0],
-                            background_color=(255, 255, 255),
-                            text_color=(0, 0, 0),
-                        )
-                        st.image(original_preview, use_container_width=True)
-                    else:
-                        st.info("No slides in presentation")
+                        if prs.slides:
+                            original_preview = generate_slide_preview(
+                                prs.slides[0],
+                                background_color=(255, 255, 255),
+                                text_color=(0, 0, 0),
+                            )
+                            st.image(original_preview, width=320)
+                        else:
+                            st.info("No slides in presentation")
                 except Exception as e:
                     st.warning(f"Could not generate preview: {e}")
 
@@ -182,12 +161,13 @@ def main():
             # Show what the inverted slide would look like with actual color transform
             if first_pptx and prs:
                 try:
-                    inverted_preview = generate_slide_preview_inverted(
-                        prs.slides[0],
-                        background_color=hex_to_tuple(bg_color),
-                        foreground_color=hex_to_tuple(fg_color),
-                    )
-                    st.image(inverted_preview, use_container_width=True)
+                    with st.spinner("Loading preview..."):
+                        inverted_preview = generate_slide_preview_inverted(
+                            prs.slides[0],
+                            background_color=hex_to_tuple(bg_color),
+                            foreground_color=hex_to_tuple(fg_color),
+                        )
+                        st.image(inverted_preview, width=320)
                 except Exception as e:
                     st.warning(f"Could not generate preview: {e}")
 
@@ -201,37 +181,51 @@ def main():
                 date_str = datetime.now().strftime("%Y-%m-%d")
                 final_folder_name = f"{folder_name} - {date_str}"
 
-            config_payload = (fg_color, bg_color, file_suffix, final_folder_name, invert_images)
+            config = InversionConfig.from_hex(
+                fg_hex=fg_color,
+                bg_hex=bg_color,
+                file_suffix=file_suffix,
+                folder_name=final_folder_name,
+                invert_images=invert_images,
+            )
 
-            # Progress tracking (local only; cached path returns instantly)
+            # Build cache key for manual reuse
+            file_hashes = tuple((name, _hash_file(name, data)) for name, data in file_blobs)
+            cache_key = (fg_color, bg_color, file_suffix, final_folder_name, invert_images, file_hashes)
+
             progress_bar = st.progress(0)
             status_text = st.empty()
             warnings_container = st.container()
 
-            def update_progress(current: int, total: int, filename: str):
-                progress = current / total if total > 0 else 1.0
-                progress_bar.progress(progress)
-                status_text.text(f"Processing: {filename} ({current}/{total})")
+            cached_entry = st.session_state.get("last_result")
+            if cached_entry and cached_entry.get("key") == cache_key:
+                result = cached_entry["result"]
+                progress_bar.progress(1.0)
+                status_text.text(
+                    f"Complete! (cached) Processed {result.successful_files}/{result.total_files} files"
+                )
+            else:
+                def update_progress(current: int, total: int, filename: str):
+                    progress = current / total if total > 0 else 1.0
+                    progress_bar.progress(progress)
+                    status_text.text(f"Processing: {filename} ({current}/{total})")
 
-            # Process files via cache (hashes by file bytes + config)
-            with st.spinner("Processing presentations..."):
-                result = _cached_process_files(tuple(file_blobs), config_payload)
-                # Progress for cached path is not incremental; show done
+                with st.spinner("Processing presentations..."):
+                    # Reset file pointers before processing
+                    for f in uploaded_files:
+                        f.seek(0)
+                    result = process_files(
+                        uploaded_files,
+                        config,
+                        progress_callback=update_progress,
+                    )
+
                 progress_bar.progress(1.0)
                 status_text.text(
                     f"Complete! Processed {result.successful_files}/{result.total_files} files"
                 )
 
-            # Show warnings
-            if result.all_warnings:
-                with warnings_container:
-                    st.warning(f"Completed with {len(result.all_warnings)} warning(s)")
-                    with st.expander("Show warnings"):
-                        for warning in result.all_warnings:
-                            st.write(f"- {warning}")
-
-            # Store result in session state
-            st.session_state.processed_result = result
+                st.session_state.last_result = {"key": cache_key, "result": result}
 
             # Show warnings
             if result.all_warnings:
