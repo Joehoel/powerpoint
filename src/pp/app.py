@@ -30,7 +30,6 @@ def _cached_color_preview(bg_hex: str, fg_hex: str):
     )
 
 
-@st.cache_data(show_spinner=False)
 def _cached_previews(pptx_bytes: bytes, bg_hex: str, fg_hex: str):
     prs = Presentation(io.BytesIO(pptx_bytes))
     if not prs.slides:
@@ -157,7 +156,7 @@ def main():
             if first_pptx_bytes:
                 try:
                     with st.spinner("Loading preview..."):
-                        orig_img, inv_img = _cached_previews(first_pptx_bytes, bg_color, fg_color)
+                        orig_img, _ = _cached_previews(first_pptx_bytes, bg_color, fg_color)
                         if orig_img:
                             st.image(orig_img, width=320)
                         else:
@@ -205,7 +204,8 @@ def main():
             warnings_container = st.container()
 
             cached_entry = st.session_state.get("last_result")
-            if cached_entry and cached_entry.get("key") == cache_key:
+            cached_hit = cached_entry and cached_entry.get("key") == cache_key
+            if cached_hit:
                 result = cached_entry["result"]
                 progress_bar.progress(1.0)
                 status_text.text(
@@ -234,6 +234,10 @@ def main():
 
                 st.session_state.last_result = {"key": cache_key, "result": result}
 
+            # Store result in session state
+            st.session_state.processed_result = result
+            st.session_state.cached_hit = bool(cached_hit)
+
             # Show warnings
             if result.all_warnings:
                 with warnings_container:
@@ -242,12 +246,10 @@ def main():
                         for warning in result.all_warnings:
                             st.write(f"- {warning}")
 
-            # Store result in session state
-            st.session_state.processed_result = result
-
         # Show download button if we have results
         if st.session_state.processed_result is not None:
             result = st.session_state.processed_result
+            cached_hit_flag = st.session_state.get("cached_hit", False)
 
             if result.output_zip:
                 # Generate filename with date
@@ -255,6 +257,10 @@ def main():
                 if include_date:
                     date_str = datetime.now().strftime("%Y-%m-%d")
                     final_folder_name = f"{folder_name} - {date_str}"
+
+                st.markdown("### Download")
+                if cached_hit_flag:
+                    st.caption("Using cached result (same files and colors)")
 
                 st.download_button(
                     label=f"Download ({result.successful_files} files)",
@@ -265,15 +271,24 @@ def main():
                     use_container_width=True,
                 )
 
-                # Show processing summary
-                with st.expander("Processing Summary"):
-                    for r in result.results:
-                        status = "Success" if r.success else "Failed"
-                        icon = "✅" if r.success else "❌"
-                        st.write(f"{icon} **{r.filename}**: {status}")
-                        if r.warnings:
-                            for w in r.warnings:
-                                st.write(f"   - ⚠️ {w}")
+                # Show processing summary table
+                st.markdown("### Processing Summary")
+                summary_rows = []
+                for r in result.results:
+                    summary_rows.append(
+                        {
+                            "File": r.filename,
+                            "Status": "Success" if r.success else "Failed",
+                            "Warnings": len(r.warnings),
+                        }
+                    )
+                st.table(summary_rows)
+
+                # Detailed warnings
+                if result.all_warnings:
+                    with st.expander("Warnings (detailed)"):
+                        for warning in result.all_warnings:
+                            st.write(f"- {warning}")
             else:
                 st.error("No files were successfully processed")
 
