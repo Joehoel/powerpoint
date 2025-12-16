@@ -26,6 +26,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Final minimal image
 FROM python:3.11-slim-bookworm
 
+# Install curl for platform healthchecks
+RUN apt-get update \ 
+    && apt-get install -y --no-install-recommends curl \ 
+    && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user for security
 RUN groupadd --system --gid 1000 app \
     && useradd --system --gid 1000 --uid 1000 --create-home app
