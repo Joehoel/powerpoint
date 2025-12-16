@@ -5,7 +5,7 @@ import io
 import pytest
 from PIL import Image
 
-from pp.core.image_processor import apply_color_transform, _remap_colors
+from pp.core.image_processor import apply_color_transform
 
 
 class TestApplyColorTransform:
@@ -94,50 +94,33 @@ class TestApplyColorTransform:
         # Palette images are converted to RGBA to preserve any transparency
         assert result.mode == "RGBA"
 
-
-class TestRemapColors:
-    """Tests for the _remap_colors function."""
-
-    def test_identity_remap(self):
-        """Test remapping with black to white keeps same range."""
-        img = Image.new("RGB", (10, 10), (128, 128, 128))
-        
-        result = _remap_colors(
-            img,
-            target_dark=(0, 0, 0),
-            target_light=(255, 255, 255),
-        )
-        
-        # Middle gray should stay roughly middle gray
-        pixel = result.getpixel((5, 5))
-        assert 120 <= pixel[0] <= 136  # Allow tolerance for rounding
-
-    def test_color_remap(self):
-        """Test remapping to a different color range."""
+    def test_color_remap_white_to_yellow(self):
+        """Test remapping white to a custom light color."""
         # Create a white image
         img = Image.new("RGB", (10, 10), (255, 255, 255))
         
-        result = _remap_colors(
+        result = apply_color_transform(
             img,
             target_dark=(0, 0, 128),
             target_light=(255, 255, 0),
         )
         
-        # White should map to target_light (yellow)
+        # White inverted is black, then remapped to target_dark (navy)
         pixel = result.getpixel((5, 5))
-        assert pixel[0] == 255  # Red
-        assert pixel[1] == 255  # Green
-        assert pixel[2] == 0    # Blue
+        assert pixel[0] == 0    # Red
+        assert pixel[1] == 0    # Green
+        assert pixel[2] == 128  # Blue
 
-    def test_black_remap(self):
-        """Test that black maps to target_dark."""
+    def test_color_remap_black_to_navy(self):
+        """Test that black maps correctly after inversion."""
         img = Image.new("RGB", (10, 10), (0, 0, 0))
         
-        result = _remap_colors(
+        result = apply_color_transform(
             img,
             target_dark=(100, 50, 25),
             target_light=(200, 150, 125),
         )
         
+        # Black inverted is white (255,255,255), then remapped to target_light
         pixel = result.getpixel((5, 5))
-        assert pixel == (100, 50, 25)
+        assert pixel == (200, 150, 125)

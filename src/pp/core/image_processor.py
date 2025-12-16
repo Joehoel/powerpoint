@@ -7,7 +7,8 @@ import io
 import logging
 from typing import TYPE_CHECKING
 
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageOps
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
@@ -16,6 +17,9 @@ if TYPE_CHECKING:
     from pptx.slide import Slide
 
 logger = logging.getLogger(__name__)
+
+# JPEG quality for output images (92 is visually lossless)
+JPEG_QUALITY = 92
 
 
 def apply_color_transform(
@@ -28,10 +32,7 @@ def apply_color_transform(
     This creates a more sophisticated inversion that maps the image's color range
     to the specified target colors rather than simple RGB inversion.
 
-    Handles three types of transparency:
-    1. RGBA images with explicit alpha channel
-    2. RGB images with transparency color defined in img.info['transparency']
-    3. Palette images with transparency
+    Optimized version using in-place numpy operations for memory efficiency.
 
     Args:
         img: PIL Image to transform.
@@ -41,112 +42,62 @@ def apply_color_transform(
     Returns:
         Transformed PIL Image (RGBA if transparency present, RGB otherwise).
     """
-    from PIL import ImageOps
-
     alpha = None
-    transparency_color = None
+    has_alpha = False
 
     # Handle different image modes and transparency types
     if img.mode == "RGBA":
-        # Explicit alpha channel
-        alpha = img.split()[3]
-        img_rgb = img.convert("RGB")
+        has_alpha = True
+        arr = np.array(img, dtype=np.uint8)
+        alpha = arr[:, :, 3].copy()
+        arr = arr[:, :, :3]
     elif img.mode == "RGB" and "transparency" in img.info:
-        # RGB with transparency color - convert to RGBA first
         transparency_color = img.info["transparency"]
-        img_rgb, alpha = _convert_transparency_color_to_alpha(img, transparency_color)
+        arr = np.array(img, dtype=np.uint8)
+        # Create alpha from transparency color
+        matches = np.all(arr == transparency_color, axis=2)
+        alpha = np.where(matches, 0, 255).astype(np.uint8)
+        has_alpha = True
     elif img.mode == "P":
-        # Palette mode - convert to RGBA to handle any transparency
         rgba = img.convert("RGBA")
-        alpha = rgba.split()[3]
-        img_rgb = rgba.convert("RGB")
+        arr = np.array(rgba, dtype=np.uint8)
+        alpha = arr[:, :, 3].copy()
+        arr = arr[:, :, :3]
+        has_alpha = True
     elif img.mode != "RGB":
-        img_rgb = img.convert("RGB")
+        arr = np.array(img.convert("RGB"), dtype=np.uint8)
     else:
-        img_rgb = img
+        arr = np.array(img, dtype=np.uint8)
 
-    # Invert the image
-    inverted = ImageOps.invert(img_rgb)
+    # Invert in-place: 255 - arr
+    arr = np.subtract(255, arr, dtype=np.uint8)
 
-    # If target colors are standard black/white inversion, we're done
-    if target_dark == (0, 0, 0) and target_light == (255, 255, 255):
-        result = inverted
+    # If target colors are not standard black/white, remap colors
+    if target_dark != (0, 0, 0) or target_light != (255, 255, 255):
+        # Convert to float32 for interpolation, process in-place
+        arr_float = arr.astype(np.float32)
+        arr_float *= (1.0 / 255.0)  # Normalize to 0-1
+
+        # Compute color range once
+        dark = np.array(target_dark, dtype=np.float32) / 255.0
+        light = np.array(target_light, dtype=np.float32) / 255.0
+        color_range = light - dark
+
+        # Interpolate: dark + arr * (light - dark)
+        arr_float *= color_range
+        arr_float += dark
+
+        # Convert back to uint8
+        arr_float *= 255.0
+        arr = arr_float.astype(np.uint8)
+
+    # Create result image
+    if has_alpha and alpha is not None:
+        # Combine RGB with alpha
+        result_arr = np.dstack((arr, alpha))
+        return Image.fromarray(result_arr, mode="RGBA")
     else:
-        # Apply color mapping: remap inverted image to target color range
-        result = _remap_colors(inverted, target_dark, target_light)
-
-    # Restore alpha channel if present
-    if alpha is not None:
-        result = result.convert("RGBA")
-        result.putalpha(alpha)
-
-    return result
-
-
-def _convert_transparency_color_to_alpha(
-    img: Image.Image,
-    transparency_color: tuple[int, int, int],
-) -> tuple[Image.Image, Image.Image]:
-    """Convert an RGB image with transparency color to RGB + alpha channel.
-
-    PNG images can define transparency via a specific color rather than an alpha
-    channel. This function creates an explicit alpha channel where pixels matching
-    the transparency color become fully transparent.
-
-    Args:
-        img: RGB PIL Image with transparency color.
-        transparency_color: RGB tuple that represents transparent pixels.
-
-    Returns:
-        Tuple of (RGB image, alpha channel as grayscale Image).
-    """
-    import numpy as np
-
-    # Convert to numpy for efficient comparison
-    arr = np.array(img)
-
-    # Create alpha channel: 255 for opaque, 0 for transparent
-    # Pixels matching transparency color become transparent
-    matches = np.all(arr == transparency_color, axis=2)
-    alpha_arr = np.where(matches, 0, 255).astype(np.uint8)
-
-    alpha = Image.fromarray(alpha_arr, mode="L")
-    return img, alpha
-
-
-def _remap_colors(
-    img: Image.Image,
-    target_dark: tuple[int, int, int],
-    target_light: tuple[int, int, int],
-) -> Image.Image:
-    """Remap image colors from black-white range to target color range.
-
-    Args:
-        img: RGB PIL Image (inverted).
-        target_dark: Target color for dark values.
-        target_light: Target color for light values.
-
-    Returns:
-        Remapped PIL Image.
-    """
-    import numpy as np
-
-    # Convert to numpy array for efficient processing
-    arr = np.array(img, dtype=np.float32)
-
-    # Normalize to 0-1 range
-    arr = arr / 255.0
-
-    # For each channel, interpolate between target_dark and target_light
-    result = np.zeros_like(arr)
-    for i in range(3):
-        dark_val = target_dark[i] / 255.0
-        light_val = target_light[i] / 255.0
-        result[:, :, i] = dark_val + arr[:, :, i] * (light_val - dark_val)
-
-    # Convert back to 0-255 range
-    result = (result * 255).astype(np.uint8)
-    return Image.fromarray(result, mode="RGB")
+        return Image.fromarray(arr, mode="RGB")
 
 
 def invert_image(
@@ -159,6 +110,8 @@ def invert_image(
 
     This function extracts the image, applies color transformation,
     and replaces the original with the transformed version.
+
+    Uses JPEG for faster encoding when no transparency is needed.
 
     Args:
         slide: The slide containing the picture.
@@ -185,11 +138,18 @@ def invert_image(
                     target_light=(foreground_color[0], foreground_color[1], foreground_color[2]),
                 )
 
-                # Save to bytes
+                # Save to bytes - use JPEG for RGB (faster), PNG for RGBA (transparency)
                 output_stream = io.BytesIO()
-                # Determine format - use PNG for quality, or original format if possible
-                save_format = "PNG"
-                transformed.save(output_stream, format=save_format)
+                if transformed.mode == "RGBA":
+                    transformed.save(output_stream, format="PNG", optimize=False)
+                else:
+                    # JPEG is much faster to encode than PNG
+                    transformed.save(
+                        output_stream,
+                        format="JPEG",
+                        quality=JPEG_QUALITY,
+                        optimize=False,
+                    )
                 output_stream.seek(0)
 
                 # Store position and size before removing
