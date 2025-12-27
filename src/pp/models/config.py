@@ -8,7 +8,7 @@ from pptx.dml.color import RGBColor
 # Import validation function for type checking without circular imports
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from pp.core.validation import validate_color_contrast
+    pass
 
 
 @dataclass

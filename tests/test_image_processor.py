@@ -1,8 +1,6 @@
 """Tests for image processing."""
 
-import io
 
-import pytest
 from PIL import Image
 
 from pp.core.image_processor import apply_color_transform

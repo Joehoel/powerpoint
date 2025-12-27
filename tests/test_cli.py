@@ -1,8 +1,7 @@
 """Tests for CLI module."""
 
-import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 

@@ -72,7 +72,7 @@ class TestRGBWithTransparencyColor:
         
         # Check alpha channel
         alpha = result.split()[3]
-        alpha_data = list(alpha.getdata())
+        list(alpha.getdata())
         
         # Originally white pixels (background) should now be transparent (alpha=0)
         # Originally black pixels (text) should be opaque (alpha=255)

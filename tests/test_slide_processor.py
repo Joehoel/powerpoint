@@ -21,7 +21,7 @@ class TestProcessSlide:
         """Test that slide background is set correctly."""
         slide = sample_presentation.slides[0]
         
-        warnings = process_slide(slide, default_config)
+        process_slide(slide, default_config)
         
         # Background should be black
         fill = slide.background.fill
@@ -31,7 +31,7 @@ class TestProcessSlide:
         """Test that text color is changed to foreground color."""
         slide = sample_presentation.slides[0]
         
-        warnings = process_slide(slide, default_config)
+        process_slide(slide, default_config)
         
         # Find shapes with text and check color
         for shape in slide.shapes:
@@ -44,7 +44,7 @@ class TestProcessSlide:
         """Test processing with custom colors."""
         slide = sample_presentation.slides[0]
         
-        warnings = process_slide(slide, custom_config)
+        process_slide(slide, custom_config)
         
         # Background should be navy
         fill = slide.background.fill
@@ -62,7 +62,7 @@ class TestProcessSlide:
         # Slide 2 has an image
         slide = sample_presentation.slides[1]
         
-        warnings = process_slide(slide, default_config)
+        process_slide(slide, default_config)
         
         # Should complete without errors (warnings may exist)
         # Background should still be set
@@ -77,7 +77,7 @@ class TestProcessSlide:
         # Count shapes before
         shape_count_before = len(list(slide.shapes))
         
-        warnings = process_slide(slide, config)
+        process_slide(slide, config)
         
         # Shape count should be same (image not replaced)
         shape_count_after = len(list(slide.shapes))

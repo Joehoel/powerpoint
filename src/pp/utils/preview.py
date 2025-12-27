@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 from PIL import Image, ImageDraw, ImageFont
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
-from pptx.util import Emu
 
 if TYPE_CHECKING:
     from pptx.slide import Slide
@@ -64,10 +63,9 @@ def generate_slide_preview(
     # Get font for text rendering
     try:
         font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", max(10, int(14 * scale * 50)))
-        title_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", max(12, int(18 * scale * 50)))
+        ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", max(12, int(18 * scale * 50)))
     except (OSError, IOError):
         font = ImageFont.load_default()
-        title_font = font
 
     # Collect and sort shapes by z-order (render order)
     # Pictures first, then text on top

@@ -7,7 +7,6 @@ import logging
 from typing import TYPE_CHECKING
 
 from pptx.dml.color import RGBColor
-from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 from pp.core.image_processor import invert_image, is_picture_shape
 from pp.models.config import InversionConfig

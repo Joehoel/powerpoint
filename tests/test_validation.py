@@ -1,6 +1,5 @@
 """Tests for color validation module."""
 
-import pytest
 from pptx.dml.color import RGBColor
 
 from pp.core.validation import (

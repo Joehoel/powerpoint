@@ -12,7 +12,7 @@ import zipfile
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Callable, Iterator, cast
+from typing import IO, TYPE_CHECKING, Callable, Iterator
 
 from pptx import Presentation
 from pptx.dml.color import RGBColor

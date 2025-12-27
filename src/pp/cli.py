@@ -8,9 +8,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
 
-from pp.core.inverter import process_files
 from pp.models.config import InversionConfig
 
 logger = logging.getLogger(__name__)

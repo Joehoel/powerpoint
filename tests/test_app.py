@@ -5,19 +5,16 @@ This test suite focuses on testable functions and logic in the app module.
 """
 
 import io
-from pathlib import Path
 from datetime import datetime
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.enum.text import PP_ALIGN
+from pptx.util import Inches
 from pptx.dml.color import RGBColor
 
 from pp.app import (
     _get_final_folder_name,
-    _cached_color_preview,
     _cached_previews,
     _hash_file,
 )
