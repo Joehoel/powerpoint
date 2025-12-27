@@ -34,6 +34,31 @@ class TestHexToRgb:
         result = hex_to_rgb("#AbCdEf")
         assert result == RGBColor(171, 205, 239)
 
+    def test_hex_empty_string(self):
+        """Test with empty string."""
+        with pytest.raises(ValueError, match="cannot be empty"):
+            hex_to_rgb("")
+
+    def test_hex_too_short(self):
+        """Test with string that's too short."""
+        with pytest.raises(ValueError, match="must be exactly 6 characters"):
+            hex_to_rgb("#FF00")
+
+    def test_hex_too_long(self):
+        """Test with string that's too long."""
+        with pytest.raises(ValueError, match="must be exactly 6 characters"):
+            hex_to_rgb("#FF0000FF")
+
+    def test_hex_invalid_characters(self):
+        """Test with invalid hex characters."""
+        with pytest.raises(ValueError, match="Must contain only hex digits"):
+            hex_to_rgb("#GG0000")
+
+    def test_hex_with_invalid_hex_chars(self):
+        """Test with invalid hex characters but correct length."""
+        with pytest.raises(ValueError, match="Must contain only hex digits"):
+            hex_to_rgb("ZZZZZZ")
+
 
 class TestRgbToHex:
     """Tests for rgb_to_hex function."""
@@ -65,6 +90,7 @@ class TestInversionConfig:
         assert config.file_suffix == "(inverted)"
         assert config.folder_name == "Inverted Presentations"
         assert config.invert_images is True
+        assert config.jpeg_quality == 85
 
     def test_custom_values(self):
         """Test custom configuration values."""
@@ -74,12 +100,14 @@ class TestInversionConfig:
             file_suffix="(custom)",
             folder_name="Custom",
             invert_images=False,
+            jpeg_quality=95,
         )
         assert config.foreground_color == RGBColor(255, 255, 0)
         assert config.background_color == RGBColor(0, 0, 128)
         assert config.file_suffix == "(custom)"
         assert config.folder_name == "Custom"
         assert config.invert_images is False
+        assert config.jpeg_quality == 95
 
     def test_from_hex(self):
         """Test creating config from hex color strings."""
@@ -102,3 +130,12 @@ class TestInversionConfig:
         )
         assert config.foreground_color == RGBColor(255, 255, 255)
         assert config.background_color == RGBColor(0, 0, 0)
+
+    def test_from_hex_with_quality(self):
+        """Test from_hex with custom JPEG quality."""
+        config = InversionConfig.from_hex(
+            fg_hex="#FFFFFF",
+            bg_hex="#000000",
+            jpeg_quality=75,
+        )
+        assert config.jpeg_quality == 75

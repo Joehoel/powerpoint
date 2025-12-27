@@ -62,7 +62,7 @@ def process_slide(slide: "Slide", config: InversionConfig) -> list[str]:
     if config.invert_images:
         for shape in picture_shapes:
             warning = invert_image(
-                slide, shape, config.background_color, config.foreground_color
+                slide, shape, config.background_color, config.foreground_color, config.jpeg_quality
             )
             if warning:
                 warnings.append(warning)

@@ -17,9 +17,23 @@ from pp.utils.preview import (
     hex_to_tuple,
 )
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _get_final_folder_name(folder_name: str, include_date: bool) -> str:
+    """Get final folder name with optional date suffix.
+    
+    Args:
+        folder_name: Base folder name.
+        include_date: Whether to append today's date.
+    
+    Returns:
+        Folder name, potentially with date suffix (YYYY-MM-DD).
+    """
+    if not include_date:
+        return folder_name
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    return f"{folder_name} - {date_str}"
 
 
 @st.cache_data(show_spinner=False)
@@ -199,10 +213,7 @@ def main():
         # Process button
         if st.button("Invert Presentations", type="primary", use_container_width=True):
             # Build configuration
-            final_folder_name = folder_name
-            if include_date:
-                date_str = datetime.now().strftime("%Y-%m-%d")
-                final_folder_name = f"{folder_name} - {date_str}"
+            final_folder_name = _get_final_folder_name(folder_name, include_date)
 
             config = InversionConfig.from_hex(
                 fg_hex=fg_color,
@@ -276,10 +287,7 @@ def main():
 
             if result.output_zip:
                 # Generate filename with date
-                final_folder_name = folder_name
-                if include_date:
-                    date_str = datetime.now().strftime("%Y-%m-%d")
-                    final_folder_name = f"{folder_name} - {date_str}"
+                final_folder_name = _get_final_folder_name(folder_name, include_date)
 
                 st.markdown("### Download")
                 if cached_hit_flag:

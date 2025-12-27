@@ -10,7 +10,7 @@ import logging
 import os
 import zipfile
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Callable, Iterator, cast
 
@@ -26,17 +26,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ConfigPayload = tuple[tuple[int, int, int], tuple[int, int, int], str, str, bool]
+ConfigPayload = tuple[tuple[int, int, int], tuple[int, int, int], str, str, bool, int]
 
 
 @dataclass
 class ProcessingResult:
-    """Result of processing a single file."""
+    """Result of processing a single file.
+    
+    Note: output_data field is ONLY populated by _process_file() function.
+    It is not guaranteed to be populated in other code paths.
+    Only use output_data from results returned by _process_file().
+    """
 
     filename: str
     success: bool
-    output_data: bytes | None  # Store bytes directly instead of path
-    warnings: list[str]
+    output_data: bytes | None = None  # ONLY set by _process_file()
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -84,26 +89,26 @@ def _config_to_payload(config: InversionConfig) -> ConfigPayload:
         config.file_suffix,
         config.folder_name,
         config.invert_images,
+        config.jpeg_quality,
     )
 
 
-def _config_from_payload(
-    payload: tuple[tuple[int, int, int], tuple[int, int, int], str, str, bool]
-) -> InversionConfig:
-    fg, bg, suffix, folder, invert_images = payload
+def _config_from_payload(payload: ConfigPayload) -> InversionConfig:
+    fg, bg, suffix, folder, invert_images, jpeg_quality = payload
     return InversionConfig(
         foreground_color=RGBColor(*fg),
         background_color=RGBColor(*bg),
         file_suffix=suffix,
         folder_name=folder,
         invert_images=invert_images,
+        jpeg_quality=jpeg_quality,
     )
 
 
 def _process_file(
     file_data: bytes,
     filename: str,
-    config: InversionConfig | tuple[tuple[int, int, int], tuple[int, int, int], str, str, bool],
+    config: InversionConfig | ConfigPayload,
 ) -> ProcessingResult:
     """Process a single PPTX file.
 
@@ -244,17 +249,17 @@ def process_single_file(
         )
 
 
-def process_files_streaming(
+def _collect_files_to_process(
     uploaded_files: list["UploadedFile"],
-    config: InversionConfig,
-    progress_callback: Callable[[int, int, str], None] | None = None,
-) -> Iterator[ProcessingResult]:
-    """Process multiple uploaded files with streaming results.
-
-    Uses a small, bounded executor (processes by default, threads if
-    PP_FORCE_THREADS=1) so at most a couple of files are in-flight.
+) -> tuple[list[tuple[bytes, str]], int]:
+    """Collect all PPTX files from uploaded files and ZIPs.
+    
+    Args:
+        uploaded_files: List of uploaded file objects.
+    
+    Returns:
+        Tuple of (files_to_process, total_count).
     """
-    # Collect all PPTX files to process
     files_to_process: list[tuple[bytes, str]] = []
 
     for uploaded_file in uploaded_files:
@@ -266,19 +271,42 @@ def process_files_streaming(
             extracted = _extract_pptx_from_zip(uploaded_file)
             files_to_process.extend(extracted)
 
-    total_files = len(files_to_process)
+    return files_to_process, len(files_to_process)
+
+
+def _get_executor_config(
+    config: InversionConfig,
+) -> tuple[type, int, ConfigPayload]:
+    """Get executor class, worker count, and config payload.
+    
+    Returns:
+        Tuple of (executor_class, max_workers, config_payload).
+    """
+    max_workers = _get_max_workers()
+    executor_cls = ThreadPoolExecutor if _use_threads() else ProcessPoolExecutor
+    logger.info(
+        f"Executor: {executor_cls.__name__} with {max_workers} workers"
+    )
+    return executor_cls, max_workers, _config_to_payload(config)
+
+
+def process_files_streaming(
+    uploaded_files: list["UploadedFile"],
+    config: InversionConfig,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+) -> Iterator[ProcessingResult]:
+    """Process multiple uploaded files with streaming results.
+
+    Uses a small, bounded executor (processes by default, threads if
+    PP_FORCE_THREADS=1) so at most a couple of files are in-flight.
+    """
+    files_to_process, total_files = _collect_files_to_process(uploaded_files)
 
     if total_files == 0:
         return
 
-    max_workers = _get_max_workers()
-    executor_cls = ThreadPoolExecutor if _use_threads() else ProcessPoolExecutor
-    logger.info(
-        f"Processing {total_files} files with {executor_cls.__name__} ({max_workers} workers)"
-    )
-
+    executor_cls, max_workers, payload = _get_executor_config(config)
     iterator = iter(files_to_process)
-    payload = _config_to_payload(config)
 
     def submit_next(executor, futures):
         try:
@@ -339,19 +367,7 @@ def process_files(
     Returns:
         BatchResult with output ZIP and processing statistics.
     """
-    # Collect all PPTX files to process
-    files_to_process: list[tuple[bytes, str]] = []
-
-    for uploaded_file in uploaded_files:
-        if uploaded_file.name.endswith(".pptx"):
-            files_to_process.append((uploaded_file.read(), uploaded_file.name))
-            uploaded_file.seek(0)
-
-        elif uploaded_file.name.endswith(".zip"):
-            extracted = _extract_pptx_from_zip(uploaded_file)
-            files_to_process.extend(extracted)
-
-    total_files = len(files_to_process)
+    files_to_process, total_files = _collect_files_to_process(uploaded_files)
 
     if total_files == 0:
         return BatchResult(
@@ -362,14 +378,10 @@ def process_files(
         )
 
     results: list[ProcessingResult] = []
-    executor_cls = ThreadPoolExecutor if _use_threads() else ProcessPoolExecutor
-    max_workers = _get_max_workers()
-    logger.info(
-        f"Processing {total_files} files with {executor_cls.__name__} ({max_workers} workers)"
-    )
+    executor_cls, max_workers, payload = _get_executor_config(config)
+    logger.info(f"Processing {total_files} files with {executor_cls.__name__} ({max_workers} workers)")
 
     iterator = iter(files_to_process)
-    payload = _config_to_payload(config)
 
     def submit_next(executor, futures):
         try:

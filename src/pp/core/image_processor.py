@@ -18,8 +18,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# JPEG quality for output images (85 is visually near-lossless and faster)
-JPEG_QUALITY = 85
+# Default JPEG quality for output images (85 is visually near-lossless and faster)
+# This is overridden by InversionConfig.jpeg_quality
+DEFAULT_JPEG_QUALITY = 85
 
 
 def apply_color_transform(
@@ -90,6 +91,7 @@ def invert_image(
     shape: "Picture",
     background_color: RGBColor,
     foreground_color: RGBColor,
+    jpeg_quality: int = DEFAULT_JPEG_QUALITY,
 ) -> str | None:
     """Invert colors of a picture shape on a slide.
 
@@ -132,7 +134,7 @@ def invert_image(
                     transformed.save(
                         output_stream,
                         format="JPEG",
-                        quality=JPEG_QUALITY,
+                        quality=jpeg_quality,
                         optimize=False,
                     )
                 output_stream.seek(0)

@@ -1,11 +1,15 @@
 """Utility modules for PowerPoint Inverter."""
 
-from pp.utils.file_handler import extract_pptx_files, create_output_zip
-from pp.utils.preview import generate_slide_preview, generate_color_preview
+from pp.utils.preview import (
+    generate_color_preview,
+    generate_slide_preview,
+    generate_slide_preview_inverted,
+    hex_to_tuple,
+)
 
 __all__ = [
-    "extract_pptx_files",
-    "create_output_zip",
-    "generate_slide_preview",
     "generate_color_preview",
+    "generate_slide_preview",
+    "generate_slide_preview_inverted",
+    "hex_to_tuple",
 ]
