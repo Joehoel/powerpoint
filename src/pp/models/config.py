@@ -5,6 +5,11 @@ from typing import Self
 
 from pptx.dml.color import RGBColor
 
+# Import validation function for type checking without circular imports
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from pp.core.validation import validate_color_contrast
+
 
 @dataclass
 class InversionConfig:
@@ -25,6 +30,17 @@ class InversionConfig:
     folder_name: str = "Inverted Presentations"
     invert_images: bool = True
     jpeg_quality: int = 85
+
+    def validate(self) -> list[str]:
+        """Validate color contrast and return warnings if necessary.
+        
+        Returns:
+            List of warning messages about color contrast. Empty if colors are acceptable.
+        """
+        # Import here to avoid circular imports
+        from pp.core.validation import validate_color_contrast
+        
+        return validate_color_contrast(self.foreground_color, self.background_color)
 
     @classmethod
     def from_hex(

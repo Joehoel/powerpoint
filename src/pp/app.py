@@ -107,6 +107,16 @@ def main():
                 help="Color for text content",
             )
 
+        # Check color contrast and show warnings if needed
+        config = InversionConfig.from_hex(
+            fg_hex=fg_color,
+            bg_hex=bg_color,
+        )
+        contrast_warnings = config.validate()
+        if contrast_warnings:
+            for warning in contrast_warnings:
+                st.warning(warning)
+
         # Show color preview
         st.subheader("Color Preview")
         color_preview = _cached_color_preview(bg_color, fg_color)

@@ -19,6 +19,7 @@ dev = [
 
 [project.scripts]
 pp = "pp.app:main"
+pp-cli = "pp.cli:main"
 
 [build-system]
 requires = ["hatchling"]
