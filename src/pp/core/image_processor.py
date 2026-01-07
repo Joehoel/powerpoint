@@ -39,10 +39,14 @@ def apply_color_transform(
         if dark == 0 and light == 255:
             return tuple(255 - c for c in range(256))
         scale = light - dark
-        return tuple(max(0, min(255, int(dark + (255 - c) * scale / 255))) for c in range(256))
+        return tuple(
+            max(0, min(255, int(dark + (255 - c) * scale / 255))) for c in range(256)
+        )
 
     @lru_cache(maxsize=256)
-    def build_full_lut(dark: tuple[int, int, int], light: tuple[int, int, int]) -> tuple[int, ...]:
+    def build_full_lut(
+        dark: tuple[int, int, int], light: tuple[int, int, int]
+    ) -> tuple[int, ...]:
         lr = build_channel_lut(dark[0], light[0])
         lg = build_channel_lut(dark[1], light[1])
         lb = build_channel_lut(dark[2], light[2])
@@ -86,6 +90,7 @@ def apply_color_transform(
 
     return transformed
 
+
 def invert_image(
     slide: "Slide",
     shape: "Picture",
@@ -121,8 +126,16 @@ def invert_image(
                 # and dark areas become light (foreground)
                 transformed = apply_color_transform(
                     img,
-                    target_dark=(background_color[0], background_color[1], background_color[2]),
-                    target_light=(foreground_color[0], foreground_color[1], foreground_color[2]),
+                    target_dark=(
+                        background_color[0],
+                        background_color[1],
+                        background_color[2],
+                    ),
+                    target_light=(
+                        foreground_color[0],
+                        foreground_color[1],
+                        foreground_color[2],
+                    ),
                 )
 
                 # Save to bytes - use JPEG for RGB (faster), PNG for RGBA (transparency)
@@ -169,3 +182,75 @@ def is_picture_shape(shape) -> bool:
         True if shape is a processable picture.
     """
     return shape.shape_type == MSO_SHAPE_TYPE.PICTURE
+
+
+def convert_image_colors(
+    image_bytes: bytes,
+    background_color: tuple[int, int, int],
+    foreground_color: tuple[int, int, int],
+    output_format: str | None = None,
+    jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+) -> tuple[bytes, str]:
+    """Convert image colors and return as bytes with appropriate format.
+
+    Args:
+        image_bytes: Input image as bytes.
+        background_color: RGB tuple for originally light areas (e.g., background).
+        foreground_color: RGB tuple for originally dark areas (e.g., text).
+        output_format: Force output format (PNG, JPEG, etc). If None, matches input.
+        jpeg_quality: Quality for JPEG output (1-100).
+
+    Returns:
+        Tuple of (converted image bytes, format extension like 'png' or 'jpg').
+    """
+    with io.BytesIO(image_bytes) as image_stream:
+        with Image.open(image_stream) as img:
+            # Determine original format
+            original_format = img.format or "PNG"
+
+            # Apply color transformation
+            # Note: For inversion, light areas become dark (background)
+            # and dark areas become light (foreground)
+            transformed = apply_color_transform(img, background_color, foreground_color)
+
+            # Determine output format
+            if output_format:
+                out_fmt = output_format.upper()
+            else:
+                out_fmt = original_format.upper()
+
+            # Handle format-specific logic
+            output_stream = io.BytesIO()
+
+            if out_fmt in ("JPEG", "JPG"):
+                # JPEG doesn't support transparency, convert to RGB
+                if transformed.mode == "RGBA":
+                    # Composite onto white background for JPEG
+                    background = Image.new("RGB", transformed.size, (255, 255, 255))
+                    background.paste(transformed, mask=transformed.split()[3])
+                    transformed = background
+                elif transformed.mode != "RGB":
+                    transformed = transformed.convert("RGB")
+                transformed.save(
+                    output_stream, format="JPEG", quality=jpeg_quality, optimize=False
+                )
+                ext = "jpg"
+            elif out_fmt == "GIF":
+                # GIF - let PIL handle the conversion
+                transformed.save(output_stream, format="GIF")
+                ext = "gif"
+            elif out_fmt == "WEBP":
+                transformed.save(output_stream, format="WEBP", quality=jpeg_quality)
+                ext = "webp"
+            elif out_fmt == "BMP":
+                if transformed.mode == "RGBA":
+                    transformed = transformed.convert("RGB")
+                transformed.save(output_stream, format="BMP")
+                ext = "bmp"
+            else:
+                # Default to PNG (supports transparency)
+                transformed.save(output_stream, format="PNG", optimize=False)
+                ext = "png"
+
+            output_stream.seek(0)
+            return output_stream.getvalue(), ext
