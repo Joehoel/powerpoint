@@ -118,6 +118,37 @@ Drie lagen: **OPC (publieke escape hatch) → proxies (python-pptx-vormig, maar 
 en compacter) → fluent/templating**. De proxy-laag houdt het mentale model van
 python-pptx zodat migratie 1-op-1 overzet; de fluent laag is wat python-pptx nooit kreeg.
 
+### Leidend principe: de API als ladder
+
+Toetssteen voor dit ontwerp is [*APIs as ladders*](https://blog.sbensu.com/posts/apis-as-ladders/)
+(Sebastian Bensusan; sinds 2019 in gebruik bij Stripe): een API is een leerladder waarop
+elke geleerde concept-sport meer problemen oplosbaar maakt. Beginners eisen *convenient*,
+gevorderden *gradual* (geen "knowledge cliffs"), experts *flexible* — en je bouwt in
+omgekeerde volgorde: **eerst flexibel, dan gradueel, dan convenient**. Onze spike-volgorde
+(OPC → proxies → fluent) volgde dat al; de publieke OPC-laag garandeert dat "sorry, onze
+API zou dat moeten kunnen maar kan het niet" nooit ons antwoord is. De ladder-toets
+scherpte het ontwerp op vijf punten aan:
+
+1. **Closure property: fluent geeft de proxy terug.** `s.addText(...)` retourneert de
+   `Shape`, geen `void` — elke gemaksoperatie landt op de volgende sport in plaats van
+   in een doodlopend steegje.
+2. **Geen semantische sprong tussen lagen.** Unit-tagged waardes (`cm(2)`, `pt(32)`) en
+   het kleurtype zijn op élke laag hetzelfde type; alleen de XML-laag spreekt EMU.
+3. **Tussensport naar de XML.** `shape.xml` geeft geen kale parser-tree maar een dun
+   `XmlElement`-wrappertje met de publieke helpers uit de `xml`-package
+   (`firstChild`/`walk`/`attrs`), en elke proxy documenteert wélk element hij wrapt
+   (à la python-pptx' analysis-docs).
+4. **Anti-create-react-app-regel.** Elke fluent methode toont in zijn documentatie het
+   proxy-equivalent ("dit is suiker voor …"), zodat elke gemakssport de laag eronder
+   onthult in plaats van verstopt.
+5. **Middensport voor kleuren.** Tussen `"#E8E8F0"` en raw `lumMod`-transforms zit het
+   PowerPoint-UI-vocabulaire als API: `{ theme: "accent1", lighter: 0.4 }` ("Accent 1,
+   Lighter 40%") — vertaalt intern naar lumMod/lumOff.
+
+De `./effect`- en `./result`-adapters (§7) zijn in ladder-termen geen extra sporten maar
+**parallelle ladders met dezelfde sporten**: dunne vertalingen over dezelfde core, dus in
+elk ecosysteem dezelfde leercurve.
+
 ```ts
 import { Presentation } from "@scope/pptx";
 
@@ -144,11 +175,16 @@ run.font.color.effective(); // loopt ook run → paragraaf → placeholder → m
 ```
 
 ```ts
-// Fluent creatie met unit-tagged waardes (geen EMU-rekenwerk):
+// Fluent creatie met unit-tagged waardes (geen EMU-rekenwerk). Elke fluent
+// call geeft de onderliggende proxy terug (ladder-regel 1):
 import { pt, cm } from "@scope/pptx/units";
 deck.addSlide((s) => {
   s.title("Kwartaalcijfers Q3");
-  s.addText("Omzet +12%", { at: [cm(2), cm(4)], font: { size: pt(32), bold: true, color: { theme: "accent1" } } });
+  const box = s.addText("Omzet +12%", {                       // → Shape, geen void
+    at: [cm(2), cm(4)],
+    font: { size: pt(32), bold: true, color: { theme: "accent1", lighter: 0.4 } }, // ladder-regel 5
+  });
+  box.name = "KPI";                                           // naadloos één sport lager
 });
 
 // First-class templating (de docxtemplater/pptx-automizer-use-case in de core):
@@ -157,8 +193,10 @@ template.cloneSlide(2, (s) => {
   s.shape("HeroImage").image.replace(product.photo);
 });
 
-// Escape hatches — shape._element en slide.part.package, maar dan als nette API:
-shape.xml;  slide.part.name;  deck.package.relationshipsOf(slide.part.name);
+// Escape hatches — shape._element en slide.part.package, maar dan als nette API.
+// shape.xml is een XmlElement-wrapper met de publieke xml-helpers (ladder-regel 3):
+shape.xml.firstChild("p:txBody");  slide.part.name;
+deck.package.relationshipsOf(slide.part.name);
 ```
 
 Verdere ontwerpkeuzes: strikte TS-types (op termijn gegenereerd uit de ECMA-376 XSD's,
@@ -217,4 +255,5 @@ beta-API's hoeft alleen het adapterbestand mee.
 - Ecosysteem: [PptxGenJS](https://github.com/gitbrent/PptxGenJS) · [pptx-automizer](https://github.com/singerla/pptx-automizer) · [docxtemplater-modules](https://docxtemplater.com/shop/modules/) · [dolanmiu/docx](https://github.com/dolanmiu/docx) · [SheetJS CSF](https://docs.sheetjs.com/docs/csf/)
 - Bouwstenen: [fflate](https://github.com/101arrowz/fflate) · [fast-xml-parser](https://github.com/NaturalIntelligence/fast-xml-parser) · [txml-benchmarks](https://tnickel.de/2020/08/30/2020-08-how-the-fastest-xml-parser-is-build/) · [Workers web-standards](https://developers.cloudflare.com/workers/runtime-apis/web-standards/)
 - Adapters: [Effect v4 beta](https://www.effect.website/blog/releases/effect/40-beta) · [better-result](https://better-result.dev/)
+- API-ontwerp: [APIs as ladders — Sebastian Bensusan](https://blog.sbensu.com/posts/apis-as-ladders/)
 - Empirie: [`spikes/FINDINGS.md`](spikes/FINDINGS.md) in deze repo
