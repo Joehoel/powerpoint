@@ -6,7 +6,7 @@
 //  - whitespace-only text nodes preserved? (a:t with trailing spaces matters!)
 //  - parse speed on a real slide part
 import { readFile } from "node:fs/promises";
-import { readZip } from "./lib/opc.mjs";
+import { readZip } from "./packages/opc/index.mjs";
 import * as txml from "txml";
 import { XMLParser, XMLBuilder } from "fast-xml-parser";
 

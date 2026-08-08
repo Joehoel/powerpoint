@@ -1,13 +1,13 @@
 # Spike-bevindingen: python-pptx → cross-runtime JavaScript-library
 
-Vijf spikes die de aannames uit het researchplan toetsen. Alle code in deze map is
+Zes spikes die de aannames uit het researchplan toetsen. Alle code in deze map is
 wegwerp-prototype (bewust zonder edge cases als Zip64, data descriptors, strict-mode
 OOXML); de conclusies zijn het deliverable.
 
 **Testomgeving:** Node v22.22.2 en Bun 1.3.11, fixtures uit `tests/fixtures/`
 (echte PowerPoint-bestanden, 86–755 KiB). Referentie: python-pptx 1.0.2 op Python 3.11.
 
-## Spike 1 — Zelf de OPC/zip-container doen (`01-opc-zip.mjs`, `lib/opc.mjs`)
+## Spike 1 — Zelf de OPC/zip-container doen (`01-opc-zip.mjs`, `packages/opc/index.mjs`)
 
 **Vraag:** Is JSZip/zip.js nodig, of is de OPC-container simpel genoeg om zelf te doen
 op alleen fflate + web-standaarden?
@@ -40,7 +40,7 @@ De txml-*parser* zou nog als read-only fastpath kunnen dienen, maar voor lezen+s
 is fast-xml-parser met `preserveOrder: true, trimValues: false, parseTagValue: false` de
 juiste keuze. PowerPoint en python-pptx accepteren de her-geserialiseerde XML.
 
-## Spike 3 — Lazy-proxy-architectuur werkt (`03-proxy-prototype.mjs`, `lib/pptx.mjs`)
+## Spike 3 — Lazy-proxy-architectuur werkt (`03-proxy-prototype.mjs`, `packages/pptx/index.mjs`)
 
 **Vraag:** is python-pptx's architectuur (proxies op een lazy geparsede XML-tree, alleen
 dirty parts her-serialiseren) haalbaar in ~150 regels JS, met een API die de flow van
@@ -83,7 +83,7 @@ maar ~6 ms te winnen.
 
 ## Spike 5 — Cross-runtime (`05-runtime.mjs`)
 
-- Core-lib (`lib/`) bevat **nul** Node-specifieke APIs (geen `Buffer`, `fs`, `node:*`,
+- Core-packages (`packages/`) bevatten **nul** Node-specifieke APIs (geen `Buffer`, `fs`, `node:*`,
   `process`) — alleen `Uint8Array`/`DataView`/`TextDecoder`/`TextEncoder`.
 - Draait ongewijzigd onder Node 22 én Bun 1.3; output is **byte-identiek**
   (zelfde SHA-256) → deterministisch schrijven werkt cross-runtime.
@@ -91,6 +91,53 @@ maar ~6 ms te winnen.
   is beschikbaar, maar met copy-through (spike 4) nauwelijks nog nodig.
 - Deno niet getest (niet in deze omgeving); risico laag omdat de core alleen
   web-baseline gebruikt, maar hoort in de CI-matrix van het echte project.
+
+## Spike 6 — Gelaagde package-split: OPC als formaat-agnostische onderlaag (`06-layered-packages.mjs`)
+
+**Vraag:** kan de library gesplitst worden in een low-level package dat "de spec praat"
+(ECMA-376 Part 2 / OPC + XML-infrastructuur), zodat Word/Excel-libraries later op
+dezelfde onderlaag gebouwd kunnen worden?
+
+**Antwoord: ja, en de laaggrens ligt precies waar de spec hem legt.** De code is
+geherstructureerd naar drie packages:
+
+```
+packages/xml/    fidelity-preserving parse/serialize + tree-helpers   (formaat-agnostisch)
+packages/opc/    ECMA-376 Part 2: zip, parts, relationships,          (formaat-agnostisch)
+                 target-resolutie, mainPart() via officeDocument-rel
+packages/pptx/   PresentationML-proxies (slides/shapes/runs)          (formaat-specifiek)
+```
+
+Bewijs van formaat-agnosticisme in twee aktes:
+
+- **Akte A:** de volledige pptx-invert-flow draait ongewijzigd op de nieuwe lagen,
+  mét als bonus spec-correcte slide-volgorde via `p:sldIdLst` + rels (open vraag uit
+  ronde 1 opgelost) — de pptx-laag bevat nu nul zip- of relationship-code.
+- **Akte B:** een complete WordprocessingML-minilaag (paragrafen lezen, runs
+  herkleuren) bleek **~40 regels** bovenop dezelfde `opc`+`xml`-packages. Een door
+  python-docx gegenereerde .docx wordt gelezen, herkleurd en teruggeschreven;
+  python-docx valideert het resultaat (3/3 runs juiste kleur, en de trailing space
+  in "Hello from python-docx. " overleeft de round-trip — fidelityprobe geslaagd).
+- Zelfs `mainPart()` is gedeeld: pptx én docx vinden hun hoofddocument via exact
+  dezelfde `officeDocument`-relationship op package-niveau.
+
+Precedent dat deze split de juiste keuze is: python-pptx en python-docx dragen elk
+een *gedupliceerde* interne `opc`-package mee (de aparte python-opc-package is ooit
+gestrand), terwijl .NET's Open XML SDK de OPC-laag wél apart heeft
+(`System.IO.Packaging`). De gedeelde DrawingML-laag (kleuren, thema's, units — door
+alle drie de formaten gebruikt) is de logische vierde package zodra theme-resolutie
+gespiked wordt.
+
+Voorgestelde package-structuur voor het echte project:
+
+```
+@scope/ooxml-xml   (of gevouwen in opc)     ← spike: packages/xml
+@scope/opc                                   ← spike: packages/opc
+@scope/ooxml-dml   DrawingML: kleuren/thema's/units (nog niet gespiked)
+@scope/pptx                                  ← spike: packages/pptx
+@scope/docx        later                     ← spike: WordDocument-demo (40 regels)
+@scope/xlsx        later
+```
 
 ## Beantwoorde aannames
 
@@ -100,11 +147,11 @@ maar ~6 ms te winnen.
 3. ✅ python-pptx's lazy-proxy-model vertaalt direct naar JS en de API kan compacter.
 4. ✅ Pure TS ruim snel genoeg (5,5× python-pptx); WASM uitgesteld, terecht.
 5. ✅ Web-baseline-only core draait identiek op meerdere runtimes.
+6. ✅ De OPC/XML-onderlaag is formaat-agnostisch splitsbaar: dezelfde packages dragen
+   pptx én een 40-regels docx-laag (spike 6).
 
 ## Openstaande vragen voor een volgende ronde
 
-- **Slide-volgorde**: het prototype sorteert op bestandsnaam; echt moet `p:sldIdLst` +
-  presentation-rels gevolgd worden (bekend, niet gespiked).
 - **Theme-kleurresolutie** (`schemeClr` → RGB via master/layout/theme-keten): de
   beloofde differentiator, nog niet gespiked — goede kandidaat voor spike 6.
 - **Grote bestanden / Zip64** (>4 GB offsets, >65k entries): irrelevant voor pptx in de
@@ -122,4 +169,9 @@ node 01-opc-zip.mjs && node 02-xml-roundtrip.mjs && node 03-proxy-prototype.mjs
 uv run python spikes/03-validate.py spikes/out/spike3-inverted.pptx  # vanuit repo-root
 node 04-bench.mjs && uv run python spikes/04-bench.py tests/fixtures/hagar-presentatie.pptx
 node 05-runtime.mjs && bun 05-runtime.mjs
+# spike 6 (vanuit repo-root): layered packages, pptx + docx op dezelfde onderlaag
+uv run --with python-docx spikes/06-validate.py generate
+cd spikes && node 06-layered-packages.mjs && cd ..
+uv run python spikes/03-validate.py spikes/out/spike6-inverted.pptx
+uv run --with python-docx spikes/06-validate.py verify
 ```

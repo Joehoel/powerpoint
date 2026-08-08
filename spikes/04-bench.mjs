@@ -3,8 +3,8 @@
 // level costs, since zip write dominated spike 1.
 import { readFile } from "node:fs/promises";
 import { deflateSync } from "fflate";
-import { Presentation } from "./lib/pptx.mjs";
-import { readZip, writeZip } from "./lib/opc.mjs";
+import { Presentation } from "./packages/pptx/index.mjs";
+import { readZip, writeZip } from "./packages/opc/index.mjs";
 
 const fixture = process.argv[2] ?? "../tests/fixtures/hagar-presentatie.pptx";
 const bytes = new Uint8Array(await readFile(fixture));

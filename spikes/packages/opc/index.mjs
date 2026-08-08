@@ -1,7 +1,12 @@
-// Spike: minimal OPC (zip) reader/writer on Web-platform APIs + fflate only.
-// Question answered: is hand-rolling the zip container simple enough that we
-// don't need JSZip/zip.js, and does it survive a PowerPoint round-trip?
+// Package "opc": ECMA-376 Part 2 — Open Packaging Conventions.
+// Format-agnostic: knows zip, parts, content types and relationships.
+// Knows NOTHING about slides, documents or sheets — pptx/docx/xlsx layers
+// build on this. Depends only on fflate and the sibling "xml" package.
 import { inflateSync, deflateSync } from "fflate";
+import { parseXml, walk, attrsOf } from "../xml/index.mjs";
+
+const td = new TextDecoder();
+const te = new TextEncoder();
 
 // fflate keeps its crc32 internal, so bring our own (standard table-based).
 const CRC_TABLE = new Uint32Array(256).map((_, n) => {
@@ -15,17 +20,18 @@ function crc32(data) {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-const td = new TextDecoder();
-const te = new TextEncoder();
-
 const EOCD_SIG = 0x06054b50;
 const CEN_SIG = 0x02014b50;
 const LOC_SIG = 0x04034b50;
 
-/** Read a zip archive into a Map<name, {data: Uint8Array}> (eager for spike purposes). */
+/** Well-known relationship type for the main document part (same URI family for pptx/docx/xlsx). */
+export const REL_OFFICE_DOCUMENT =
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
+
+// --- zip layer (spike 1, with lazy inflate + copy-through of clean parts) ---
+
 export function readZip(bytes) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  // Find End Of Central Directory record (scan back over optional comment).
   let eocd = -1;
   for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65535); i--) {
     if (dv.getUint32(i, true) === EOCD_SIG) { eocd = i; break; }
@@ -38,6 +44,7 @@ export function readZip(bytes) {
   for (let i = 0; i < count; i++) {
     if (dv.getUint32(off, true) !== CEN_SIG) throw new Error("bad central directory entry");
     const method = dv.getUint16(off + 10, true);
+    const crc = dv.getUint32(off + 16, true);
     const csize = dv.getUint32(off + 20, true);
     const usize = dv.getUint32(off + 24, true);
     const nameLen = dv.getUint16(off + 28, true);
@@ -46,16 +53,12 @@ export function readZip(bytes) {
     const localOff = dv.getUint32(off + 42, true);
     const name = td.decode(bytes.subarray(off + 46, off + 46 + nameLen));
 
-    // Local header repeats name/extra lengths; data follows it.
     if (dv.getUint32(localOff, true) !== LOC_SIG) throw new Error("bad local header");
     const lNameLen = dv.getUint16(localOff + 26, true);
     const lExtraLen = dv.getUint16(localOff + 28, true);
     const dataStart = localOff + 30 + lNameLen + lExtraLen;
     const raw = bytes.subarray(dataStart, dataStart + csize);
-    const crc = dv.getUint32(off + 16, true);
-    // Lazy: inflate on first access. Untouched parts keep their original
-    // compressed bytes, which writeZip copies through without re-deflating.
-    const entry = {
+    entries.set(name, {
       raw, method, crc, usize,
       dirty: false,
       _data: null,
@@ -63,14 +66,12 @@ export function readZip(bytes) {
         return (this._data ??= this.method === 0 ? this.raw.slice() : inflateSync(this.raw, { size: this.usize }));
       },
       set data(v) { this._data = v; this.dirty = true; },
-    };
-    entries.set(name, entry);
+    });
     off += 46 + nameLen + extraLen + commentLen;
   }
   return entries;
 }
 
-/** Write a Map<name, {data}> back to a zip (deflate everything, like PowerPoint does). */
 export function writeZip(entries) {
   const chunks = [];
   const central = [];
@@ -79,7 +80,6 @@ export function writeZip(entries) {
     const nameBytes = te.encode(name);
     let crc, body, method, usize;
     if (entry.raw && !entry.dirty) {
-      // Clean part: copy original compressed bytes through, no inflate/deflate.
       ({ crc, method, usize } = entry);
       body = entry.raw;
     } else {
@@ -87,7 +87,6 @@ export function writeZip(entries) {
       usize = data.length;
       crc = crc32(data);
       const compressed = deflateSync(data, { level: 6 });
-      // Store when deflate doesn't help (rare for XML, common for already-compressed media).
       const store = compressed.length >= data.length;
       body = store ? data : compressed;
       method = store ? 0 : 8;
@@ -96,7 +95,7 @@ export function writeZip(entries) {
     const local = new Uint8Array(30 + nameBytes.length);
     const ldv = new DataView(local.buffer);
     ldv.setUint32(0, LOC_SIG, true);
-    ldv.setUint16(4, 20, true); // version needed
+    ldv.setUint16(4, 20, true);
     ldv.setUint16(8, method, true);
     ldv.setUint32(14, crc, true);
     ldv.setUint32(18, body.length, true);
@@ -138,4 +137,66 @@ export function writeZip(entries) {
   let pos = 0;
   for (const c of chunks) { out.set(c, pos); pos += c.length; }
   return out;
+}
+
+// --- OPC semantics on top of the zip ---------------------------------------
+
+/** Resolve a (possibly relative) rels Target against the source part's folder. */
+function resolveTarget(basePart, target) {
+  if (/^[a-z]+:/i.test(target)) return target; // external URI
+  const baseDir = basePart.includes("/") ? basePart.slice(0, basePart.lastIndexOf("/")) : "";
+  const segments = (target.startsWith("/") ? target.slice(1) : `${baseDir ? baseDir + "/" : ""}${target}`).split("/");
+  const out = [];
+  for (const s of segments) {
+    if (s === "." || s === "") continue;
+    if (s === "..") out.pop();
+    else out.push(s);
+  }
+  return out.join("/");
+}
+
+export class OpcPackage {
+  #entries;
+  static open(bytes) { return new OpcPackage(readZip(bytes)); }
+  constructor(entries) { this.#entries = entries; }
+
+  get partNames() { return [...this.#entries.keys()]; }
+  read(partName) { return this.#entries.get(partName)?.data ?? null; }
+  write(partName, data) {
+    const entry = this.#entries.get(partName);
+    if (entry) entry.data = data;
+    else this.#entries.set(partName, { data, dirty: true });
+  }
+
+  /** Relationships of a part ("" or "/" = package-level _rels/.rels), targets resolved. */
+  relationshipsOf(partName = "") {
+    const relsName = partName
+      ? partName.replace(/^(.*?)([^/]+)$/, "$1_rels/$2.rels")
+      : "_rels/.rels";
+    const bytes = this.read(relsName);
+    if (!bytes) return [];
+    return [...walk(parseXml(bytes), "Relationship")].map((rel) => {
+      const a = attrsOf(rel);
+      return {
+        id: a.Id,
+        type: a.Type,
+        external: a.TargetMode === "External",
+        target: a.TargetMode === "External" ? a.Target : resolveTarget(partName, a.Target),
+      };
+    });
+  }
+
+  /** Follow relationship rId from a part to the target part's name. */
+  resolve(partName, rId) {
+    return this.relationshipsOf(partName).find((r) => r.id === rId)?.target ?? null;
+  }
+
+  /** Main document part via the officeDocument relationship — works for pptx, docx and xlsx. */
+  mainPart() {
+    const rel = this.relationshipsOf("").find((r) => r.type === REL_OFFICE_DOCUMENT);
+    if (!rel) throw new Error("no officeDocument relationship: not an OOXML package?");
+    return rel.target;
+  }
+
+  save() { return writeZip(this.#entries); }
 }

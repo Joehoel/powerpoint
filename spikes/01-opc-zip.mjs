@@ -4,7 +4,7 @@
 //  b) byte-identical part contents after read
 //  c) unzip -> rezip output is accepted by python-pptx (validated separately)
 import { readFile, writeFile } from "node:fs/promises";
-import { readZip, writeZip } from "./lib/opc.mjs";
+import { readZip, writeZip } from "./packages/opc/index.mjs";
 
 const fixture = process.argv[2] ?? "../tests/fixtures/hagar-presentatie.pptx";
 const bytes = new Uint8Array(await readFile(fixture));

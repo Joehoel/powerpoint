@@ -2,7 +2,7 @@
 // dark background + light text on every slide, and prove image blobs resolve.
 // Output is validated against python-pptx separately (03-validate.py).
 import { readFile, writeFile } from "node:fs/promises";
-import { Presentation } from "./lib/pptx.mjs";
+import { Presentation } from "./packages/pptx/index.mjs";
 
 const fixture = process.argv[2] ?? "../tests/fixtures/hagar-presentatie.pptx";
 const BG = "1A1A2E";

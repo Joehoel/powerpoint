@@ -1,9 +1,9 @@
 // Spike 5: cross-runtime check. Run under both `node` and `bun`.
-// Verifies: (a) the core lib (lib/opc.mjs + lib/pptx.mjs) uses zero
+// Verifies: (a) the core packages (packages/*) use zero
 // runtime-specific APIs, (b) native CompressionStream("deflate-raw") exists
 // as a potential fast path, (c) the full invert flow produces the same bytes.
 import { readFile } from "node:fs/promises"; // runner-only; core lib stays web-baseline
-import { Presentation } from "./lib/pptx.mjs";
+import { Presentation } from "./packages/pptx/index.mjs";
 
 const runtime = typeof Bun !== "undefined" ? `bun ${Bun.version}`
   : typeof Deno !== "undefined" ? `deno ${Deno.version.deno}`
