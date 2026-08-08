@@ -4,6 +4,7 @@
 // Slide order now follows p:sldIdLst + rels (spec-correct), not filename sort.
 import { OpcPackage } from "../opc/index.mjs";
 import { parseXml, serializeXml, walk, firstChild, childrenOf, attrsOf, tagOf, el, text } from "../xml/index.mjs";
+import { parseColorScheme, resolveColor } from "../dml/index.mjs";
 
 class Run {
   #node; #slide;
@@ -84,6 +85,36 @@ class Slide {
   }
   serializeIfDirty() {
     if (this.#dirty) this.pkg.write(this.partName, serializeXml(this.#tree));
+  }
+
+  /**
+   * Theme color resolution context for this slide (spike 7).
+   * PresentationML-specific: walks slide -> layout -> master -> theme through
+   * OPC rels, applies p:clrMap (+ any a:overrideClrMapping on slide/layout),
+   * then delegates the actual color math to the format-agnostic dml package.
+   */
+  colorContext() {
+    const relOf = (part, suffix) =>
+      this.pkg.relationshipsOf(part).find((r) => r.type.endsWith(suffix))?.target;
+    const layout = relOf(this.partName, "/slideLayout");
+    const master = layout && relOf(layout, "/slideMaster");
+    const themePart = master && relOf(master, "/theme");
+    if (!themePart) throw new Error("could not walk slide->layout->master->theme chain");
+
+    const scheme = parseColorScheme(parseXml(this.pkg.read(themePart)));
+    let clrMap = { ...attrsOf([...walk(parseXml(this.pkg.read(master)), "p:clrMap")][0]) };
+    for (const part of [layout, this.partName]) {
+      const ovr = [...walk(parseXml(this.pkg.read(part)), "a:overrideClrMapping")][0];
+      if (ovr) clrMap = { ...attrsOf(ovr) };
+    }
+    const lookup = (name) => scheme[clrMap[name] ?? name];
+    return {
+      scheme,
+      clrMap,
+      themePart,
+      /** Resolve an a:srgbClr/a:sysClr/a:schemeClr node to {hex, alpha}. */
+      resolve: (colorNode) => resolveColor(colorNode, lookup),
+    };
   }
 }
 

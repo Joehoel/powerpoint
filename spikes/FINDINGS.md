@@ -1,6 +1,6 @@
 # Spike-bevindingen: python-pptx → cross-runtime JavaScript-library
 
-Zes spikes die de aannames uit het researchplan toetsen. Alle code in deze map is
+Zeven spikes die de aannames uit het researchplan toetsen. Alle code in deze map is
 wegwerp-prototype (bewust zonder edge cases als Zip64, data descriptors, strict-mode
 OOXML); de conclusies zijn het deliverable.
 
@@ -133,11 +133,46 @@ Voorgestelde package-structuur voor het echte project:
 ```
 @scope/ooxml-xml   (of gevouwen in opc)     ← spike: packages/xml
 @scope/opc                                   ← spike: packages/opc
-@scope/ooxml-dml   DrawingML: kleuren/thema's/units (nog niet gespiked)
+@scope/ooxml-dml   DrawingML: kleuren/thema's/units               ← spike: packages/dml (spike 7)
 @scope/pptx                                  ← spike: packages/pptx
 @scope/docx        later                     ← spike: WordDocument-demo (40 regels)
 @scope/xlsx        later
 ```
+
+## Spike 7 — Theme-kleurresolutie: schemeClr → RGB (`07-theme-colors.mjs`, `packages/dml/`)
+
+**Vraag:** kunnen we de beloofde differentiator waarmaken — `a:schemeClr` naar echte
+RGB resolven via de slide → layout → master → theme-keten — en wat hoort er dan in de
+gedeelde DrawingML-package?
+
+**Antwoord: ja, en de laaggrens tekent zichzelf.** Nieuw: `packages/dml/` met de pure,
+formaat-agnostische kleurmachinerie (clrScheme-parsing, HSL-transforms voor
+`lumMod`/`lumOff`/`satMod`, `tint`/`shade`, `alpha`); de PresentationML-specifieke helft
+(rels-keten walken, `p:clrMap` + `a:overrideClrMapping`) zit als `slide.colorContext()`
+in de pptx-package. Precies de scheidslijn die de spec trekt: docx/xlsx gebruiken
+dezelfde `a:clrScheme` en transforms, maar hebben hun eigen mapping-mechaniek.
+
+Validatie in drie aktes:
+
+- **Kleurwiskunde vs PowerPoint's eigen UI-waarden**: de standaard accent1-varianten
+  (#4472C4 → "Lighter 60/40%", "Darker 25/50%") komen binnen ±1 per kanaal uit
+  (B4C6E7 vs B4C7E7; 8EAADB, 2F5496, 1F3864 exact). lumMod/lumOff werken in
+  HSL-luminantie: `L' = L·lumMod + lumOff`.
+- **Volledige keten op de echte fixtures**: accent1/tx1→dk1/bg2→lt2 via `p:clrMap`
+  kloppen exact, het `a:sysClr lastClr`-pad werkt, en een sweep over alle
+  slides+layouts+masters resolvet **101 schemeClr-nodes** zonder één miss
+  (`phClr` uitgezonderd — placeholder-kleur is caller-context, geen theme-slot).
+- **Cross-validatie tegen een onafhankelijke schrijver**: een deck geschreven door
+  python-pptx's eigen theme-color-API (`MSO_THEME_COLOR.ACCENT_1`, `brightness=0.4`
+  → lumMod 60k/lumOff 40k). Onze resolver geeft 4F81BD exact en 95B3D7 voor de
+  brightness-variant — precies PowerPoint's officiële "Lighter 40%"-waarde voor het
+  Office 2007-thema dat python-pptx's default template draagt. (Leuke vangst: dat
+  template is dus het óúde thema, niet 4472C4.)
+
+Restpunten: PowerPoint's exacte afronding wijkt soms ±1/kanaal af (vermoedelijk
+fixed-point intern — acceptabel; exact matchen is een uitzoekklus voor de echte
+implementatie), en `hueMod`/`comp`/`inv`/`gamma` plus `phClr`-doorvertaling zijn
+bewust buiten spike-scope gelaten.
 
 ## Beantwoorde aannames
 
@@ -149,11 +184,11 @@ Voorgestelde package-structuur voor het echte project:
 5. ✅ Web-baseline-only core draait identiek op meerdere runtimes.
 6. ✅ De OPC/XML-onderlaag is formaat-agnostisch splitsbaar: dezelfde packages dragen
    pptx én een 40-regels docx-laag (spike 6).
+7. ✅ Theme-kleurresolutie (de differentiator) werkt en valideert tegen PowerPoint's
+   eigen UI-waarden én tegen python-pptx als onafhankelijke schrijver (spike 7).
 
 ## Openstaande vragen voor een volgende ronde
 
-- **Theme-kleurresolutie** (`schemeClr` → RGB via master/layout/theme-keten): de
-  beloofde differentiator, nog niet gespiked — goede kandidaat voor spike 6.
 - **Grote bestanden / Zip64** (>4 GB offsets, >65k entries): irrelevant voor pptx in de
   praktijk, maar de writer moet er netjes op falen.
 - **`xml:space`/entity-details**: fast-xml-parser ontsnapt entiteiten correct in onze
@@ -174,4 +209,6 @@ uv run --with python-docx spikes/06-validate.py generate
 cd spikes && node 06-layered-packages.mjs && cd ..
 uv run python spikes/03-validate.py spikes/out/spike6-inverted.pptx
 uv run --with python-docx spikes/06-validate.py verify
+# spike 7: theme-kleurresolutie
+uv run python spikes/07-generate.py && cd spikes && node 07-theme-colors.mjs
 ```
